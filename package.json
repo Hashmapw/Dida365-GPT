@@ -1,0 +1,31 @@
+{
+  "name": "didauto",
+  "version": "1.0.0",
+  "description": "AI assisted creator for TickTick/Dida365 tasks",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node ./node_modules/nodemon/bin/nodemon.js --config nodemon.json src/server.js",
+    "start": "node src/server.js",
+    "test": "echo \"No tests configured\" && exit 0"
+  },
+  "keywords": [
+    "dida365",
+    "ticktick",
+    "openapi",
+    "gpt"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.22.1",
+    "node-fetch": "^3.3.2",
+    "openai": "^6.15.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

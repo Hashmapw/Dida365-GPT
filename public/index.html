@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dida365 GPT 任务助手</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="https://developer.dida365.com/static/media/logo.661c5af2.svg" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" />
+  </head>
+  <body data-time-zone="Asia/Shanghai">
+    <main class="container">
+      <header class="hero">
+        <div class="hero-text">
+          <p class="eyebrow">Dida365 · GPT Workflow</p>
+          <h1>Markdown Todo List 2 Dida365</h1>
+          <p class="subtitle">
+            将组会上散落的Todo待办列表，自动整理并提交到滴答清单，AI帮你补充细节，提高任务管理效率！
+          </p>
+        </div>
+        <div class="hero-actions">
+          <div class="status-buttons">
+            <button type="button" id="oauthStatusBtn" class="status-pill">滴答未授权</button>
+            <button type="button" id="aiStatusBtn" class="status-pill">AI 未连接</button>
+            <div class="status-split">
+              <button type="button" id="projectListBtn" class="status-pill ghost-pill">清单列表</button>
+              <button type="button" id="submissionsBtn" class="status-pill ghost-pill">提交记录</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section class="card" id="input-section">
+        <div class="section-header">
+          <h2>1. 粘贴原始任务</h2>
+          <p>支持 Markdown 中的勾选列表或普通段落，AI 会保持语言风格并补充细节</p>
+        </div>
+        <textarea id="rawTasks" rows="8" placeholder="- [ ] 筛选一下MathVision-MiniTest，推理步较多的题目ID
+- [x] 处理一下LLM与MLLM的Prompt，两者是否有思考过程上的不同要求"></textarea>
+        <div class="controls">
+          <div>
+            <label class="inline locale-picker-label">
+              输出语言
+              <div class="locale-picker" id="localePicker">
+                <button type="button" class="locale-picker-trigger">
+                  <span class="locale-picker-text">中文</span>
+                  <span class="locale-picker-caret">▾</span>
+                </button>
+                <div class="locale-picker-menu">
+                  <button type="button" class="locale-option" data-value="zh">中文</button>
+                  <button type="button" class="locale-option" data-value="en">English</button>
+                </div>
+              </div>
+            </label>
+          </div>
+          <div id="aiProgress" class="progress hidden inline-progress">
+            <div class="progress-track">
+              <div id="aiProgressFill" class="progress-fill"></div>
+            </div>
+            <span id="aiProgressText">0/0</span>
+          </div>
+          <div class="button-row">
+            <button id="generateBtn" class="primary">AI 整理</button>
+            <button id="addTaskBtn" type="button">手动添加</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="tasks-section">
+        <div class="section-header">
+          <h2>2. 校对 / 编辑 AI 任务</h2>
+          <div class="section-actions">
+            <p>可以手动调整标题、简述、详细说明、优先级、计划时间等，或补充子任务</p>
+            <button type="button" id="clearTasksBtn" class="ghost small">清空所有任务</button>
+          </div>
+        </div>
+        <div id="tasksContainer" class="task-list">
+          <p class="muted">👉 先运行一次「AI 整理」，这里会展示结构化的任务列表</p>
+        </div>
+      </section>
+
+      <div class="floating-submit">
+        <form id="createForm">
+          <button type="submit" class="primary">提交到滴答清单</button>
+        </form>
+        <div class="status" id="createStatus"></div>
+        <div id="createProgress" class="progress hidden">
+          <div class="progress-track">
+            <div id="createProgressFill" class="progress-fill indeterminate"></div>
+          </div>
+          <span id="createProgressText">正在提交...</span>
+        </div>
+      </div>
+
+    </main>
+    <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content">
+        <header class="modal-head">
+          <h3>确认提交这些任务</h3>
+          <button type="button" id="modalClose" aria-label="关闭">×</button>
+        </header>
+        <p class="muted modal-tip">请在发送到滴答清单之前，最终检查并可直接在此调整标题、简述、优先级和时间</p>
+        <div id="modalTaskList" class="modal-task-list"></div>
+        <footer class="modal-actions">
+          <button type="button" id="modalCancel">取消</button>
+          <button type="button" class="primary" id="modalConfirm">确认创建</button>
+        </footer>
+      </div>
+    </div>
+    <div id="oauthModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content oauth-modal">
+        <header class="modal-head">
+          <h3>滴答授权中心</h3>
+          <button type="button" id="oauthModalClose" aria-label="关闭">×</button>
+        </header>
+        <div class="oauth-modal-section">
+          <p class="muted modal-tip">
+            首次进入会自动弹出此面板，可选择下方「一键授权」或切换到「手动授权」粘贴 Authorization Code
+          </p>
+          <div class="oauth-modal-controls">
+            <div class="oauth-modal-col">
+              <h4>方式一 · 一键授权</h4>
+              <p class="muted tiny">自动打开滴答登录页，完成后会回到此窗口并缓存 Token</p>
+            </div>
+            <div class="oauth-modal-buttons">
+              <button type="button" id="startOauthBtn" class="primary">立即一键授权</button>
+              <button type="button" id="checkOauthBtn" class="ghost">刷新授权状态</button>
+            </div>
+          </div>
+        </div>
+        <div class="status" id="oauthStatus"></div>
+        <div class="oauth-modal-section manual">
+          <h4>方式二 · 手动授权</h4>
+          <p class="muted tiny">滴答授权页面复制 Authorization Code，并在此粘贴后交换 Token</p>
+          <form id="tokenForm" class="form-grid compact">
+            <label>
+              Authorization Code
+              <input type="text" name="authCode" id="authCode" placeholder="例如：6WA85v" required />
+            </label>
+            <label>
+              Client ID
+              <input type="text" name="clientId" id="clientId" placeholder="覆盖 .env 中的 clientId" />
+            </label>
+            <label>
+              Client Secret
+              <input type="text" name="clientSecret" id="clientSecret" placeholder="覆盖 .env 中的 clientSecret" />
+            </label>
+            <label>
+              Redirect URI
+              <input type="text" id="redirectDisplay" readonly />
+            </label>
+            <button type="submit" class="primary">手动授权</button>
+          </form>
+        </div>
+    <div class="status" id="tokenStatus"></div>
+  </div>
+</div>
+<div id="aiSettingsModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-content ai-modal">
+    <header class="modal-head">
+      <h3>AI 接入配置</h3>
+      <button type="button" id="aiModalClose" aria-label="关闭">×</button>
+    </header>
+    <p class="muted modal-tip">可临时覆盖 OpenAI Base URL 与 API Key，刷新后会恢复服务端默认配置</p>
+    <form class="form-grid">
+      <label>
+        OpenAI Base URL
+        <input type="text" id="openaiBaseUrl" placeholder="例如：https://api.openai.com/v1" />
+      </label>
+      <label>
+        OpenAI API Key
+        <input type="password" id="openaiKey" placeholder="sk-..." autocomplete="off" />
+      </label>
+    </form>
+    <p class="muted tiny">为安全起见，以上字段仅存在当前会话的浏览器内存，不会被持久化</p>
+  </div>
+</div>
+<div id="projectsModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-content projects-modal">
+    <header class="modal-head">
+      <h3>可用清单列表</h3>
+      <button type="button" id="projectsModalClose" aria-label="关闭">×</button>
+    </header>
+    <div class="modal-actions left">
+      <button type="button" id="projectsRefreshBtn" class="ghost">刷新列表</button>
+    </div>
+    <div class="status" id="projectsStatus"></div>
+    <div id="projectsList" class="projects-list">
+      <p class="muted tiny">暂无清单，请先完成授权或填写 Access Token。</p>
+    </div>
+  </div>
+</div>
+    <div id="submissionsModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content projects-modal">
+        <header class="modal-head">
+          <h3>提交记录</h3>
+          <button type="button" id="submissionsModalClose" aria-label="关闭">×</button>
+    </header>
+    <div class="status" id="submissionsStatus"></div>
+        <div id="submissionsList" class="projects-list">
+          <p class="muted tiny">暂无提交记录。</p>
+        </div>
+      </div>
+    </div>
+    <div id="toastContainer" class="toast-container"></div>
+    <footer class="footer-links">
+      <a href="https://developer.dida365.com/docs#/openapi" target="_blank" rel="noreferrer">滴答清单 API</a>
+      <span>·</span>
+      <a href="https://dida365.com/webapp/" target="_blank" rel="noreferrer">滴答清单网页版</a>
+      <span>·</span>
+      <a href="https://www.sii.edu.cn/" target="_blank" rel="noreferrer">上海创智学院</a>
+    </footer>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
