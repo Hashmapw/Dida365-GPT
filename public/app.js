@@ -842,8 +842,9 @@ function createSchedulePicker(task, onChange) {
   });
 
   container.append(trigger, menu);
+  // Persist initial schedule state into the task so the payload matches the UI.
+  applyUpdates();
   syncInputs();
-  updateTriggerValue();
 
   return container;
 }

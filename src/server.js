@@ -499,24 +499,82 @@ function extractTitleAndDescription(text = '') {
   };
 }
 
-// Convert JS date inputs into the TickTick specific format (yyyy-MM-dd'T'HH:mm:ss+0000).
-function toDidaDate(dateValue) {
-  if (!dateValue) return undefined;
-
-  // Check if it's a pure date string (YYYY-MM-DD or YYYY/MM/DD) without time component
-  const dateOnlyMatch = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(String(dateValue).trim());
-  if (dateOnlyMatch) {
-    // Return date-only format without time component
-    const year = dateOnlyMatch[1];
-    const month = String(dateOnlyMatch[2]).padStart(2, '0');
-    const day = String(dateOnlyMatch[3]).padStart(2, '0');
-    return `${year}-${month}-${day}T00:00:00+0000`;
+// Resolve a timezone offset like +0800 from an IANA name and a specific date (for DST correctness).
+function resolveOffsetFromTimeZone(timeZone, parts = {}) {
+  const { year = 1970, month = 1, day = 1, hour = 0, minute = 0, second = 0 } = parts;
+  const anchorDate = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  try {
+    if (timeZone) {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        timeZoneName: 'shortOffset',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      });
+      const tzName = formatter.formatToParts(anchorDate).find((item) => item.type === 'timeZoneName')?.value;
+      const match = tzName && /GMT([+-]\d{1,2})(?::?(\d{2}))?/.exec(tzName);
+      if (match) {
+        const sign = match[1].startsWith('-') ? '-' : '+';
+        const hours = match[1].replace(/[+-]/, '').padStart(2, '0');
+        const minutes = (match[2] || '00').padStart(2, '0');
+        return `${sign}${hours}${minutes}`;
+      }
+    }
+  } catch (_ignored) {
+    // fall back to system offset
   }
 
-  // Otherwise, parse as datetime
-  const date = new Date(dateValue);
+  const offsetMinutes = -anchorDate.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const hours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, '0');
+  const minutes = String(Math.abs(offsetMinutes) % 60).padStart(2, '0');
+  return `${sign}${hours}${minutes}`;
+}
+
+// Check whether the original date string contains an explicit time component.
+function hasTimeComponent(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  return /[T\s]\d{1,2}:\d{1,2}/.test(raw);
+}
+
+// Convert JS date inputs into the TickTick specific format (yyyy-MM-dd'T'HH:mm:ss+ZZZZ).
+function toDidaDate(dateValue, timeZone) {
+  if (!dateValue) return undefined;
+  const raw = String(dateValue).trim();
+  const match = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/i.exec(raw);
+
+  const pad = (num) => String(num).padStart(2, '0');
+
+  // Handle date-only or date+time without timezone indicator by attaching the correct offset directly.
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = match[4] ? Number(match[4]) : 0;
+    const minute = match[5] ? Number(match[5]) : 0;
+    const second = match[6] ? Number(match[6]) : 0;
+    const offset = resolveOffsetFromTimeZone(timeZone, { year, month, day, hour, minute, second });
+    return `${pad(year)}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:${pad(second)}${offset}`;
+  }
+
+  // Otherwise, rely on Date parsing and convert to the desired offset.
+  const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return undefined;
-  return date.toISOString().replace(/\.\d{3}Z$/, '+0000');
+  const offset = resolveOffsetFromTimeZone(timeZone, {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: date.getUTCHours(),
+    minute: date.getUTCMinutes(),
+    second: date.getUTCSeconds(),
+  });
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}${offset}`;
 }
 
 // Generate local time in ISO 8601 format with timezone offset
@@ -554,7 +612,7 @@ function mapPriorityToDida(value = 'none') {
 }
 
 // Process a single subtask item, supporting both string and object formats
-function processSubTaskItem(item, index) {
+function processSubTaskItem(item, index, timeZone) {
   // String format (backward compatibility)
   if (typeof item === 'string') {
     return {
@@ -573,12 +631,12 @@ function processSubTaskItem(item, index) {
     };
 
     // Add optional time fields only if valid
-    const startDate = toDidaDate(item.startDate);
+    const startDate = toDidaDate(item.startDate, timeZone);
     if (startDate) {
       subTask.startDate = startDate;
     }
 
-    const completedTime = toDidaDate(item.completedTime);
+    const completedTime = toDidaDate(item.completedTime, timeZone);
     if (completedTime) {
       subTask.completedTime = completedTime;
     }
@@ -623,8 +681,13 @@ function buildDidaPayload(task, projectId, timeZone, fallbackReminders = []) {
     reminders: Array.isArray(task.reminders) && task.reminders.length ? task.reminders : fallbackReminders,
   };
 
-  const due = toDidaDate(task.dueDate || task.suggestedDueDate);
-  const start = toDidaDate(task.startDate);
+  const dueInput = task.dueDate || task.suggestedDueDate;
+  const startInput = task.startDate;
+  const dueHasTime = hasTimeComponent(dueInput);
+  const startHasTime = hasTimeComponent(startInput);
+
+  const due = toDidaDate(dueInput, timeZone);
+  const start = toDidaDate(startInput, timeZone);
   if (due) {
     payload.dueDate = due;
     if (start) {
@@ -634,9 +697,16 @@ function buildDidaPayload(task, projectId, timeZone, fallbackReminders = []) {
     payload.startDate = start;
   }
 
+  // 如果输入中没有明确的时间，则自动设置为全天任务
+  const shouldForceAllDay =
+    (!dueHasTime && Boolean(dueInput)) || (!startHasTime && Boolean(startInput));
+  if (shouldForceAllDay) {
+    payload.isAllDay = true;
+  }
+
   if (Array.isArray(task.subTasks) && task.subTasks.length) {
     payload.items = task.subTasks
-      .map((item, index) => processSubTaskItem(item, index))
+      .map((item, index) => processSubTaskItem(item, index, timeZone))
       .filter(item => item !== null && item.title);
   }
 
@@ -1097,7 +1167,7 @@ app.post('/api/dida/tasks', async (req, res) => {
         },
       });
       createdTask = response.data;
-      results.push({ title: payload.title, success: true, task: createdTask });
+      results.push({ title: payload.title, success: true, task: createdTask, payload, inputTask: task });
     } catch (error) {
       if (error.response?.status === 401 && (await provider.handleUnauthorized())) {
         try {
@@ -1109,7 +1179,14 @@ app.post('/api/dida/tasks', async (req, res) => {
             },
           });
           createdTask = retryResponse.data;
-          results.push({ title: payload.title, success: true, task: createdTask, retried: true });
+          results.push({
+            title: payload.title,
+            success: true,
+            task: createdTask,
+            retried: true,
+            payload,
+            inputTask: task,
+          });
         } catch (retryError) {
           console.error('Retry after refresh failed:', retryError.response?.data || retryError.message);
           results.push({
@@ -1161,13 +1238,56 @@ app.post('/api/dida/tasks', async (req, res) => {
 
   const successEntries = results
     .filter((item) => item.success && item.task?.id)
-    .map((item) => ({
-      id: item.task.id,
-      title: item.title,
-      projectId,
-      projectName,
-      createdAt: new Date().toISOString(),
-    }));
+    .map((item) => {
+      const entry = {
+        id: item.task.id,
+        title: item.task.title || item.title,
+        projectId: item.task.projectId || projectId,
+        projectName,
+        createdAt: new Date().toISOString(),
+      };
+
+      // 记录原始请求和滴答返回，用于回溯问题
+      if (item.payload) {
+        entry.request = item.payload;
+      }
+      if (item.inputTask) {
+        entry.inputTask = item.inputTask;
+      }
+      entry.response = item.task;
+
+      // 保留描述相关字段
+      if (item.task.content) entry.content = item.task.content;
+      if (item.task.desc) entry.desc = item.task.desc;
+
+      // 保留优先级
+      if (item.task.priority !== undefined) entry.priority = item.task.priority;
+
+      // 保留时间相关字段
+      if (item.task.timeZone) entry.timeZone = item.task.timeZone;
+      if (item.task.isAllDay !== undefined) entry.isAllDay = item.task.isAllDay;
+      if (item.task.dueDate) entry.dueDate = item.task.dueDate;
+      if (item.task.startDate) entry.startDate = item.task.startDate;
+
+      // 保留提醒设置
+      if (item.task.reminders && item.task.reminders.length) {
+        entry.reminders = item.task.reminders;
+      }
+
+      // 保留子任务
+      if (item.task.items && item.task.items.length) {
+        entry.items = item.task.items;
+      }
+
+      // 保留完成状态
+      if (item.completed) entry.completed = true;
+      if (item.completeError) entry.completeError = item.completeError;
+
+      // 保留重试标记
+      if (item.retried) entry.retried = true;
+
+      return entry;
+    });
   appendSubmissions(successEntries);
 
   res.json({
