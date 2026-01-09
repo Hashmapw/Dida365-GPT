@@ -125,10 +125,13 @@ const oauthSessions = new Map();
 restorePersistedSessions();
 const DEFAULT_SCOPE = 'tasks:read tasks:write';
 const TOKEN_EXPIRY_BUFFER_SECONDS = 60;
+const CLIENT_DIST_DIR = path.join(__dirname, '../dist');
+const CLIENT_PUBLIC_DIR = path.join(__dirname, '../public');
+const STATIC_DIR = fs.existsSync(CLIENT_DIST_DIR) ? CLIENT_DIST_DIR : CLIENT_PUBLIC_DIR;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, '../public'), { extensions: ['html'] }));
+app.use(express.static(STATIC_DIR, { extensions: ['html'] }));
 
 app.get('/api/time/config', (_req, res) => {
   res.json({ timeSource: TIME_SOURCE });
@@ -547,6 +550,16 @@ function hasTimeComponent(value) {
 function toDidaDate(dateValue, timeZone) {
   if (!dateValue) return undefined;
   const raw = String(dateValue).trim();
+
+  // If the string already contains an explicit timezone (e.g., 2026-01-09T11:00:00+08:00 or Z),
+  // keep the wall-clock time as-is and only normalize the offset format.
+  const explicitTzMatch = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?)([+-]\d{2}:?\d{2}|Z)$/i.exec(raw);
+  if (explicitTzMatch) {
+    const base = explicitTzMatch[1];
+    const offsetPart = explicitTzMatch[2] === 'Z' ? '+0000' : explicitTzMatch[2].replace(':', '');
+    return `${base}${offsetPart}`;
+  }
+
   const match = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/i.exec(raw);
 
   const pad = (num) => String(num).padStart(2, '0');
@@ -670,13 +683,15 @@ function buildDidaPayload(task, projectId, timeZone, fallbackReminders = []) {
     throw new Error('projectId 不能为空');
   }
 
+  const effectiveTimeZone = timeZone && timeZone !== 'Local' ? timeZone : TIME_SOURCE || 'Asia/Shanghai';
+
   const payload = {
     projectId: finalProjectId,
     title: task.title?.trim() || 'Untitled task',
     content: summaryContent.slice(0, 280),
     desc: description,
     priority: mapPriorityToDida(task.priority),
-    timeZone,
+    timeZone: effectiveTimeZone,
     isAllDay: Boolean(task.isAllDay),
     reminders: Array.isArray(task.reminders) && task.reminders.length ? task.reminders : fallbackReminders,
   };
@@ -686,8 +701,8 @@ function buildDidaPayload(task, projectId, timeZone, fallbackReminders = []) {
   const dueHasTime = hasTimeComponent(dueInput);
   const startHasTime = hasTimeComponent(startInput);
 
-  const due = toDidaDate(dueInput, timeZone);
-  const start = toDidaDate(startInput, timeZone);
+  const due = toDidaDate(dueInput, effectiveTimeZone);
+  const start = toDidaDate(startInput, effectiveTimeZone);
   if (due) {
     payload.dueDate = due;
     if (start) {
@@ -704,9 +719,19 @@ function buildDidaPayload(task, projectId, timeZone, fallbackReminders = []) {
     payload.isAllDay = true;
   }
 
+  // 如果是全天任务，移除日期中的时间部分，避免滴答显示时间
+  if (payload.isAllDay) {
+    if (payload.dueDate) {
+      payload.dueDate = payload.dueDate.split('T')[0];
+    }
+    if (payload.startDate) {
+      payload.startDate = payload.startDate.split('T')[0];
+    }
+  }
+
   if (Array.isArray(task.subTasks) && task.subTasks.length) {
     payload.items = task.subTasks
-      .map((item, index) => processSubTaskItem(item, index, timeZone))
+      .map((item, index) => processSubTaskItem(item, index, effectiveTimeZone))
       .filter(item => item !== null && item.title);
   }
 
@@ -1300,12 +1325,195 @@ app.post('/api/dida/tasks', async (req, res) => {
   });
 });
 
+app.post('/api/dida/project/data', async (req, res) => {
+  const { projectId } = req.body || {};
+  if (!projectId) {
+    return res.status(400).json({ error: '缺少projectId' });
+  }
+
+  let tokenContext;
+  try {
+    tokenContext = await resolveTokenProvider(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const provider = tokenContext.provider;
+
+  const fetchProjectData = async () => {
+    const token = await provider.getToken();
+    return axios.get(`https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/data`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  };
+
+  try {
+    let response;
+    try {
+      response = await fetchProjectData();
+    } catch (error) {
+      if (error.response?.status === 401 && (await provider.handleUnauthorized())) {
+        response = await fetchProjectData();
+      } else {
+        throw error;
+      }
+    }
+    res.json({
+      success: true,
+      data: response.data,
+      auth: {
+        sessionState: provider.state,
+        refreshCount: provider.getRefreshCount(),
+        expiresAt: tokenContext.session?.expiresAt || null,
+      },
+    });
+  } catch (error) {
+    console.error('Fetch project data failed:', error.response?.data || error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      success: false,
+      error: error.response?.data || error.message,
+    });
+  }
+});
+
+app.post('/api/dida/project/data', async (req, res) => {
+  const { projectId } = req.body || {};
+  if (!projectId) {
+    return res.status(400).json({ error: '缺少projectId' });
+  }
+
+  let tokenContext;
+  try {
+    tokenContext = await resolveTokenProvider(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const provider = tokenContext.provider;
+
+  const fetchProjectData = async () => {
+    const token = await provider.getToken();
+    return axios.get(`https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/data`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  };
+
+  try {
+    let response;
+    try {
+      response = await fetchProjectData();
+    } catch (error) {
+      if (error.response?.status === 401 && (await provider.handleUnauthorized())) {
+        response = await fetchProjectData();
+      } else {
+        throw error;
+      }
+    }
+    res.json({
+      success: true,
+      data: response.data,
+      auth: {
+        sessionState: provider.state,
+        refreshCount: provider.getRefreshCount(),
+        expiresAt: tokenContext.session?.expiresAt || null,
+      },
+    });
+  } catch (error) {
+    console.error('Fetch project data failed:', error.response?.data || error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      success: false,
+      error: error.response?.data || error.message,
+    });
+  }
+});
+
+app.post('/api/dida/project/task/complete', async (req, res) => {
+  const { projectId, taskId, complete = true, task } = req.body || {};
+  if (!projectId || !taskId) {
+    return res.status(400).json({ error: '缺少projectId或taskId' });
+  }
+
+  let tokenContext;
+  try {
+    tokenContext = await resolveTokenProvider(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const provider = tokenContext.provider;
+
+  const getAuthHeaders = async () => {
+    const token = await provider.getToken();
+    return {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+  };
+
+  try {
+    if (complete) {
+      const headers = await getAuthHeaders();
+      await axios.post(
+        `https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}/complete`,
+        {},
+        { headers }
+      );
+      return res.json({ success: true });
+    }
+
+    if (!task || !task.title) {
+      return res.status(400).json({ error: '缺少任务内容，无法重新创建' });
+    }
+    const payload = {
+      title: task.title,
+      projectId,
+      content: task.content || task.desc || '',
+      desc: task.desc || '',
+      priority: typeof task.priority === 'number' ? task.priority : 0,
+      dueDate: task.dueDate || '',
+      startDate: task.startDate || '',
+      isAllDay: Boolean(task.isAllDay),
+      reminders: Array.isArray(task.reminders) ? task.reminders : [],
+      items: Array.isArray(task.items)
+        ? task.items.map((item) => ({
+            title: item.title || '',
+            status: item.status,
+            sortOrder: item.sortOrder,
+            startDate: item.startDate,
+            isAllDay: item.isAllDay,
+            timeZone: item.timeZone,
+          }))
+        : [],
+    };
+    const headers = await getAuthHeaders();
+    const response = await axios.post('https://api.dida365.com/open/v1/task', payload, { headers });
+    res.json({ success: true, recreated: response.data });
+  } catch (error) {
+    console.error('Toggle task completion failed:', error.response?.data || error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      success: false,
+      error: error.response?.data || error.message,
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+  const indexPath = path.join(STATIC_DIR, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).send('Client build not found. Please run `npm run client:build` first.');
+  }
 });
 
 app.listen(PORT, () => {

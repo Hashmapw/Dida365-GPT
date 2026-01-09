@@ -4,6 +4,10 @@
   "description": "AI assisted creator for TickTick/Dida365 tasks",
   "main": "src/server.js",
   "scripts": {
+    "build": "npm run client:build",
+    "client:build": "vite build",
+    "client:dev": "vite",
+    "client:preview": "vite preview",
     "dev": "node ./node_modules/nodemon/bin/nodemon.js --config nodemon.json src/server.js",
     "start": "node src/server.js",
     "test": "echo \"No tests configured\" && exit 0"
@@ -18,14 +22,24 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@ant-design/icons": "^5.5.5",
+    "antd": "^5.22.3",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
+    "dayjs": "^1.11.13",
     "dotenv": "^17.2.3",
     "express": "^4.22.1",
     "node-fetch": "^3.3.2",
-    "openai": "^6.15.0"
+    "openai": "^6.15.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.4.3",
+    "nodemon": "^3.1.11",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
   }
 }

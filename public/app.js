@@ -637,10 +637,14 @@ function createSchedulePicker(task, onChange) {
 
   const actionsRow = document.createElement('div');
   actionsRow.className = 'schedule-actions';
-  const todayBtn = document.createElement('button');
-  todayBtn.type = 'button';
-  todayBtn.className = 'schedule-action';
-  todayBtn.textContent = '今天';
+
+  // 左侧按钮组
+  const leftButtons = document.createElement('div');
+  leftButtons.className = 'schedule-actions-left';
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'schedule-action ghost';
+  clearBtn.textContent = '清空';
   const nowBtn = document.createElement('button');
   nowBtn.type = 'button';
   nowBtn.className = 'schedule-action';
@@ -649,12 +653,9 @@ function createSchedulePicker(task, onChange) {
   laterBtn.type = 'button';
   laterBtn.className = 'schedule-action';
   laterBtn.textContent = '稍后';
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'schedule-action ghost';
-  clearBtn.textContent = '清空';
-  actionsRow.append(todayBtn, nowBtn, laterBtn, clearBtn);
+  leftButtons.append(clearBtn, nowBtn, laterBtn);
 
+  // 右侧全天开关
   const allDayRow = document.createElement('label');
   allDayRow.className = 'schedule-all-day inline';
   const allDayToggleInline = document.createElement('input');
@@ -663,6 +664,8 @@ function createSchedulePicker(task, onChange) {
   const allDayText = document.createElement('span');
   allDayText.textContent = '全天';
   allDayRow.append(allDayToggleInline, allDayText);
+
+  actionsRow.append(leftButtons, allDayRow);
 
   const datePickers = [];
   const bindDatePicker = (input, initialValue, onSelect) => {
@@ -786,17 +789,6 @@ function createSchedulePicker(task, onChange) {
     event.stopPropagation();
     setMode('none');
   });
-  todayBtn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    state.endDate = today;
-    if (state.mode === 'range') {
-      state.startDate = today;
-      state.startTime = '';
-    }
-    state.endTime = '';
-    applyUpdates();
-    syncInputs();
-  });
   nowBtn.addEventListener('click', async (event) => {
     event.stopPropagation();
     const current = await fetchTimeParts();
@@ -832,7 +824,6 @@ function createSchedulePicker(task, onChange) {
   });
 
   wrapper.append(modeRow, startRow, endRow, actionsRow);
-  actionsRow.append(allDayRow);
   modeRow.append(pointBtn, rangeBtn, noneBtn);
   menu.appendChild(wrapper);
 

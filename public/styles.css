@@ -844,6 +844,14 @@ button:disabled {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.schedule-actions-left {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .schedule-action {
