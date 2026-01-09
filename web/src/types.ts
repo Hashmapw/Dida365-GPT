@@ -56,6 +56,8 @@ export interface SubmissionEntry {
   success?: boolean;
   error?: string;
   message?: string;
+  latestTask?: ProjectTask;
+  latestStatusCheckedAt?: string;
 }
 
 export interface TokenPayload {

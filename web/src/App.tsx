@@ -27,6 +27,7 @@ import {
   fetchTimeConfig,
   listProjects,
   fetchProjectData,
+  fetchTaskDetail,
   toggleTaskComplete,
   startAuthorize,
   stripHtmlSnippet,
@@ -465,16 +466,50 @@ export default function App() {
   }
 
   async function loadSubmissionHistory() {
-    setSubmissionsLoading(true);
-    const { response, data, rawText } = await fetchSubmissions();
-    setSubmissionsLoading(false);
-    if (!response.ok) {
-      const errorText = data?.error || stripHtmlSnippet(rawText) || '无法获取提交记录';
-      message.error(errorText);
+    if (!tokenPayload) {
+      message.error('需要授权后才能查看提交记录状态');
       return;
     }
-    const entries = Array.isArray(data.entries) ? (data.entries as SubmissionEntry[]) : [];
-    setSubmissions(entries);
+    setSubmissionsLoading(true);
+    try {
+      const { response, data, rawText } = await fetchSubmissions();
+      if (!response.ok) {
+        const errorText = data?.error || stripHtmlSnippet(rawText) || '无法获取提交记录';
+        message.error(errorText);
+        return;
+      }
+      const entries = Array.isArray(data.entries) ? (data.entries as SubmissionEntry[]) : [];
+      if (!entries.length) {
+        setSubmissions([]);
+        return;
+      }
+
+      const detailResults = await Promise.allSettled(
+        entries.map(async (entry) => {
+          if (!entry.projectId || !entry.id) return null;
+          const detail = await fetchTaskDetail({ projectId: entry.projectId, taskId: entry.id, ...(tokenPayload as TokenPayload) });
+          if (!detail.response.ok || !detail.data?.success || !detail.data?.data) {
+            return null;
+          }
+          return {
+            ...entry,
+            latestTask: detail.data.data as ProjectTask,
+            latestStatusCheckedAt: new Date().toISOString(),
+          };
+        })
+      );
+
+      const enriched = detailResults
+        .map((result) => (result.status === 'fulfilled' ? result.value : null))
+        .filter((item): item is SubmissionEntry => Boolean(item && item.latestTask));
+
+      setSubmissions(enriched);
+      if (!enriched.length) {
+        message.warning('未获取到任何有效的提交记录（可能已被删除或未找到）');
+      }
+    } finally {
+      setSubmissionsLoading(false);
+    }
   }
 
   async function loadProjectTasks(project: Project) {

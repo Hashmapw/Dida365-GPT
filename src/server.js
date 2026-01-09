@@ -1503,6 +1503,64 @@ app.post('/api/dida/project/task/complete', async (req, res) => {
   }
 });
 
+app.post('/api/dida/project/task/detail', async (req, res) => {
+  const { projectId, taskId } = req.body || {};
+  if (!projectId || !taskId) {
+    return res.status(400).json({ error: '缺少projectId或taskId' });
+  }
+
+  let tokenContext;
+  try {
+    tokenContext = await resolveTokenProvider(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const provider = tokenContext.provider;
+
+  const fetchTaskDetail = async () => {
+    const token = await provider.getToken();
+    return axios.get(
+      `https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  };
+
+  try {
+    let response;
+    try {
+      response = await fetchTaskDetail();
+    } catch (error) {
+      if (error.response?.status === 401 && (await provider.handleUnauthorized())) {
+        response = await fetchTaskDetail();
+      } else {
+        throw error;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: response.data,
+      auth: {
+        sessionState: provider.state,
+        refreshCount: provider.getRefreshCount(),
+        expiresAt: tokenContext.session?.expiresAt || null,
+      },
+    });
+  } catch (error) {
+    console.error('Fetch task detail failed:', error.response?.data || error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      success: false,
+      error: error.response?.data || error.message,
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });

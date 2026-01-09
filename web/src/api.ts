@@ -108,6 +108,14 @@ export async function toggleTaskComplete(body: { projectId: string; taskId: stri
   });
 }
 
+export async function fetchTaskDetail(body: { projectId: string; taskId: string } & TokenPayload) {
+  return requestJson<{ success: boolean; data: any; auth?: { sessionState?: string } }>('/api/dida/project/task/detail', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export interface CreateTasksBody extends TokenPayload {
   projectId: string;
   projectName?: string;
