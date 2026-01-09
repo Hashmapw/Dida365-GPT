@@ -30,7 +30,7 @@ export function RawInputSection({
         <TextArea
           rows={8}
           value={rawText}
-          placeholder={`支持 Markdown 勾选列表或自然语言描述，AI 会保持语言风格并补充细节。
+          placeholder={`支持 Markdown 勾选列表或自然语言描述，AI 会保持语言风格并补充细节
 - [ ] 明天下午3点-5点提示我听讲座
 - [x] 今天11点开组会并作LLM研究进展的汇报`}
           onChange={(e) => onRawChange(e.target.value)}

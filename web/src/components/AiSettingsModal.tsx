@@ -23,7 +23,7 @@ export function AiSettingsModal({ open, onClose, onSave, baseUrl, apiKey }: Prop
     >
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <Typography.Paragraph type="secondary">
-          临时覆盖 OpenAI Base URL 与 API Key，刷新后会恢复服务端默认配置。
+          临时覆盖 OpenAI Base URL 与 API Key，刷新后会恢复服务端默认配置
         </Typography.Paragraph>
         <Form
           layout="vertical"
@@ -42,7 +42,7 @@ export function AiSettingsModal({ open, onClose, onSave, baseUrl, apiKey }: Prop
           </Form.Item>
         </Form>
         <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          为安全起见，以上字段仅存在当前会话的浏览器内存，不会被持久化。
+          为安全起见，以上字段仅存在当前会话的浏览器内存，不会被持久化
         </Typography.Paragraph>
       </Space>
       <div style={{ display: 'none' }}>{apiKey}</div>

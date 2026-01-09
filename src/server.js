@@ -1561,6 +1561,63 @@ app.post('/api/dida/project/task/detail', async (req, res) => {
   }
 });
 
+app.post('/api/dida/project/tasks/all', async (req, res) => {
+  const { projectId } = req.body || {};
+  if (!projectId) {
+    return res.status(400).json({ error: '缺少projectId' });
+  }
+
+  let tokenContext;
+  try {
+    tokenContext = await resolveTokenProvider(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const provider = tokenContext.provider;
+
+  const fetchProjectData = async () => {
+    const token = await provider.getToken();
+    return axios.get(`https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/data`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  };
+
+  try {
+    let projectResp;
+    try {
+      projectResp = await fetchProjectData();
+    } catch (error) {
+      if (error.response?.status === 401 && (await provider.handleUnauthorized())) {
+        projectResp = await fetchProjectData();
+      } else {
+        throw error;
+      }
+    }
+
+    const mergedTasks = Array.isArray(projectResp?.data?.tasks) ? projectResp.data.tasks : [];
+
+    res.json({
+      success: true,
+      tasks: mergedTasks,
+      auth: {
+        sessionState: provider.state,
+        refreshCount: provider.getRefreshCount(),
+        expiresAt: tokenContext.session?.expiresAt || null,
+      },
+    });
+  } catch (error) {
+    console.error('Fetch project tasks failed:', error.response?.data || error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      success: false,
+      error: error.response?.data || error.message,
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });

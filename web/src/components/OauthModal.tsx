@@ -42,7 +42,7 @@ export function OauthModal({
           <div style={{ flex: 1 }}>
             <Typography.Title level={5}>方式一 · 一键授权</Typography.Title>
             <Typography.Paragraph type="secondary">
-              自动打开滴答登录页，完成后会回到此窗口并缓存 Token。
+              自动打开滴答登录页，完成后会回到此窗口并缓存 Token
             </Typography.Paragraph>
             <Space>
               <Button type="primary" icon={<ThunderboltOutlined />} onClick={onStartOauth}>
@@ -55,7 +55,7 @@ export function OauthModal({
           </div>
           <div style={{ flex: 1 }}>
             <Typography.Title level={5}>方式二 · 手动授权</Typography.Title>
-            <Typography.Paragraph type="secondary">滴答授权页面复制 Authorization Code 后提交。</Typography.Paragraph>
+            <Typography.Paragraph type="secondary">滴答授权页面复制 Authorization Code 后提交</Typography.Paragraph>
             <Form layout="vertical" form={form} onFinish={onExchangeCode}>
               <Form.Item label="Authorization Code" name="code" rules={[{ required: true, message: '请填写 code' }]}>
                 <Input placeholder="例如：6WA85v" />

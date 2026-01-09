@@ -100,6 +100,14 @@ export async function fetchProjectData(body: { projectId: string } & TokenPayloa
   });
 }
 
+export async function fetchProjectTasksAll(body: { projectId: string } & TokenPayload) {
+  return requestJson<{ success: boolean; tasks: any[]; auth?: { sessionState?: string } }>('/api/dida/project/tasks/all', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function toggleTaskComplete(body: { projectId: string; taskId: string; complete: boolean; task?: any } & TokenPayload) {
   return requestJson<{ success: boolean }>('/api/dida/project/task/complete', {
     method: 'POST',

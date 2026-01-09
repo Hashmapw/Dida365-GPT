@@ -30,7 +30,7 @@ export function ConfirmModal({ open, tasks, projects, submitting, onChange, onCa
       width={820}
     >
       <Typography.Paragraph type="secondary">
-        发送到滴答清单之前，最终检查并可直接调整标题、简述、优先级和清单。
+        发送到滴答清单之前，最终检查并可直接调整标题、简述、优先级和清单
       </Typography.Paragraph>
       <List
         dataSource={tasks}
@@ -76,7 +76,7 @@ export function ConfirmModal({ open, tasks, projects, submitting, onChange, onCa
           </List.Item>
         )}
       />
-      {!tasks.length ? <Typography.Text type="secondary">暂无任务需要提交。</Typography.Text> : null}
+      {!tasks.length ? <Typography.Text type="secondary">暂无任务需要提交</Typography.Text> : null}
     </Modal>
   );
 }

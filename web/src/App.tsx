@@ -27,6 +27,7 @@ import {
   fetchTimeConfig,
   listProjects,
   fetchProjectData,
+  fetchProjectTasksAll,
   fetchTaskDetail,
   toggleTaskComplete,
   startAuthorize,
@@ -149,6 +150,7 @@ export default function App() {
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
   const [submissionsModalOpen, setSubmissionsModalOpen] = useState(false);
+  const [submissionsRange, setSubmissionsRange] = useState<'1d' | '3d' | '7d' | '30d' | 'all'>('7d');
   const [oauthState, setOauthState] = useState<string | null>(() => {
     return localStorage.getItem(OAUTH_STATE_KEY);
   });
@@ -394,7 +396,6 @@ export default function App() {
 
   function handleTaskChange(index: number, updates: Partial<TaskItem>) {
     setTasks((prev) => prev.map((task, idx) => (idx === index ? { ...task, ...updates } : task)));
-    setPendingTasks((prev) => prev.map((task, idx) => (idx === index ? { ...task, ...updates } : task)));
   }
 
   function handleRemoveTask(index: number) {
@@ -484,27 +485,57 @@ export default function App() {
         return;
       }
 
-      const detailResults = await Promise.allSettled(
-        entries.map(async (entry) => {
-          if (!entry.projectId || !entry.id) return null;
-          const detail = await fetchTaskDetail({ projectId: entry.projectId, taskId: entry.id, ...(tokenPayload as TokenPayload) });
-          if (!detail.response.ok || !detail.data?.success || !detail.data?.data) {
-            return null;
-          }
-          return {
-            ...entry,
-            latestTask: detail.data.data as ProjectTask,
-            latestStatusCheckedAt: new Date().toISOString(),
-          };
-        })
-      );
+      const now = dayjs();
+      const rangeMap: Record<typeof submissionsRange, number> = {
+        '1d': 1,
+        '3d': 3,
+        '7d': 7,
+        '30d': 30,
+        all: Infinity,
+      };
+      const days = rangeMap[submissionsRange] ?? Infinity;
+      const filtered = entries.filter((entry) => {
+        if (days === Infinity) return true;
+        if (!entry.createdAt) return false;
+        const ts = dayjs(entry.createdAt);
+        if (!ts.isValid()) return false;
+        return now.diff(ts, 'day', true) <= days;
+      });
+      if (!filtered.length) {
+        setSubmissions([]);
+        message.warning('所选时间范围内没有提交记录');
+        return;
+      }
 
-      const enriched = detailResults
-        .map((result) => (result.status === 'fulfilled' ? result.value : null))
-        .filter((item): item is SubmissionEntry => Boolean(item && item.latestTask));
+      const enriched: SubmissionEntry[] = [];
+      let rateLimited = false;
+      for (const entry of filtered) {
+        if (rateLimited) break;
+        if (!entry.projectId || !entry.id) continue;
+        const detail = await fetchTaskDetail({ projectId: entry.projectId, taskId: entry.id, ...(tokenPayload as TokenPayload) });
+        if (!detail.response.ok || !detail.data?.success || !detail.data?.data) {
+          const errText =
+            detail.data?.error ||
+            stripHtmlSnippet(detail.rawText) ||
+            `${detail.response.status || '请求失败'} ${detail.response.statusText || ''}`.trim();
+          if (detail.response.status >= 500 || errText.includes('exceed_query_limit')) {
+            rateLimited = true;
+            break;
+          }
+          continue;
+        }
+        enriched.push({
+          ...entry,
+          latestTask: detail.data.data as ProjectTask,
+          latestStatusCheckedAt: new Date().toISOString(),
+        });
+      }
 
       setSubmissions(enriched);
-      if (!enriched.length) {
+      if (rateLimited) {
+        message.error('任务详情请求频率过快，请稍后重试或缩小时间范围');
+      }
+      if (!enriched.length && !rateLimited) {
         message.warning('未获取到任何有效的提交记录（可能已被删除或未找到）');
       }
     } finally {
@@ -512,15 +543,15 @@ export default function App() {
     }
   }
 
-  async function loadProjectTasks(project: Project) {
+  async function loadProjectTasks(project: Project, force = false) {
     if (!tokenPayload) {
       message.warning('请先完成授权');
       return;
     }
-    if (projectTasksMap[project.id]) return;
+    if (!force && projectTasksMap[project.id]) return;
     setProjectTasksLoadingId(project.id);
     setProjectTasksStatus((prev) => ({ ...prev, [project.id]: `正在加载 ${project.name || '清单'}...` }));
-    const { response, data, rawText } = await fetchProjectData({ projectId: project.id, ...tokenPayload });
+    const { response, data, rawText } = await fetchProjectTasksAll({ projectId: project.id, ...(tokenPayload as TokenPayload) });
     setProjectTasksLoadingId(null);
     if (!response.ok || !data?.success) {
       const errorText = data?.error || stripHtmlSnippet(rawText) || '获取清单任务失败';
@@ -528,7 +559,7 @@ export default function App() {
       message.error(errorText);
       return;
     }
-    const tasks = Array.isArray(data.data?.tasks) ? (data.data.tasks as ProjectTask[]) : [];
+    const tasks = Array.isArray(data.tasks) ? (data.tasks as ProjectTask[]) : [];
     setProjectTasksMap((prev) => ({ ...prev, [project.id]: tasks }));
     setCheckedProjectTaskIds((prev) => {
       const nextChecked = tasks.filter((t) => t.status === 2 || t.completedTime).map((t) => t.id);
@@ -733,6 +764,11 @@ export default function App() {
         onClose={() => setSubmissionsModalOpen(false)}
         entries={submissions}
         loading={submissionsLoading}
+        range={submissionsRange}
+        onRangeChange={(val) => {
+          setSubmissionsRange(val);
+          loadSubmissionHistory();
+        }}
         onRefresh={loadSubmissionHistory}
       />
     </div>

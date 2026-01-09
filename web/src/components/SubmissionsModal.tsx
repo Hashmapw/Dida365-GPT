@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { App as AntdApp, Modal, Typography, Space, Empty, Button, Spin, Tag, Table, Switch, Flex } from 'antd';
+import { App as AntdApp, Modal, Typography, Space, Empty, Button, Spin, Tag, Table, Switch, Flex, Segmented } from 'antd';
 import dayjs from 'dayjs';
 import { ReloadOutlined } from '@ant-design/icons';
 import { SubmissionEntry } from '../types';
@@ -10,14 +10,18 @@ interface Props {
   entries: SubmissionEntry[];
   loading: boolean;
   onRefresh: () => void;
+  range: '1d' | '3d' | '7d' | '30d' | 'all';
+  onRangeChange: (val: '1d' | '3d' | '7d' | '30d' | 'all') => void;
 }
 
-export function SubmissionsModal({ open, onClose, entries, loading, onRefresh }: Props) {
+export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, range, onRangeChange }: Props) {
   const { message } = AntdApp.useApp();
   const visibleEntries = entries.filter((item) => item.latestTask);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [progress, setProgress] = useState(0);
   const timerRef = useRef<number | null>(null);
+  const startRef = useRef<number | null>(null);
+  const DURATION_MS = 60_000;
 
   useEffect(() => {
     if (!autoRefresh || !open) {
@@ -25,28 +29,32 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh }:
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+      startRef.current = null;
       setProgress(0);
       return;
     }
+    startRef.current = Date.now();
     timerRef.current = window.setInterval(() => {
-      setProgress((prev) => {
-        const next = prev + 100 / 60;
-        if (next >= 100) {
-          onRefresh();
-          return 0;
-        }
-        return next;
-      });
-    }, 1000);
+      if (!startRef.current) return;
+      const elapsed = Date.now() - startRef.current;
+      const pct = Math.min(100, (elapsed / DURATION_MS) * 100);
+      setProgress(pct);
+      if (elapsed >= DURATION_MS) {
+        startRef.current = Date.now();
+        setProgress(0);
+        onRefresh();
+      }
+    }, 500);
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+      startRef.current = null;
     };
   }, [autoRefresh, open, onRefresh]);
 
-  const spinPercent = (autoRefresh ? 'auto' : progress) as any;
+  const spinPercent = progress;
 
   const handleCopyId = async (taskId?: string) => {
     if (!taskId) return;
@@ -65,11 +73,23 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh }:
           icon={<ReloadOutlined />}
           onClick={() => {
             setProgress(0);
+            startRef.current = autoRefresh ? Date.now() : null;
             onRefresh();
           }}
         >
           刷新
         </Button>
+        <Segmented
+          value={range}
+          onChange={(val) => onRangeChange(val as any)}
+          options={[
+            { label: '近1天', value: '1d' },
+            { label: '近3天', value: '3d' },
+            { label: '近一周', value: '7d' },
+            { label: '近一月', value: '30d' },
+            { label: '全部', value: 'all' },
+          ]}
+        />
         <Switch
           checkedChildren="自动刷新"
           unCheckedChildren="自动刷新"
@@ -77,6 +97,7 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh }:
           onChange={() => {
             setAutoRefresh((v) => !v);
             setProgress(0);
+            startRef.current = !autoRefresh ? Date.now() : null;
           }}
         />
         <Spin percent={spinPercent} size="small" />
