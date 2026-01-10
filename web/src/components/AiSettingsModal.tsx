@@ -1,3 +1,4 @@
+import React from 'react';
 import { Modal, Form, Input, Typography, Space } from 'antd';
 
 interface Props {
@@ -20,6 +21,7 @@ export function AiSettingsModal({ open, onClose, onSave, baseUrl, apiKey }: Prop
       onOk={() => form.submit()}
       okText="保存"
       cancelText="取消"
+      width={880}
     >
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <Typography.Paragraph type="secondary">
@@ -45,7 +47,7 @@ export function AiSettingsModal({ open, onClose, onSave, baseUrl, apiKey }: Prop
           为安全起见，以上字段仅存在当前会话的浏览器内存，不会被持久化
         </Typography.Paragraph>
       </Space>
-      <div style={{ display: 'none' }}>{apiKey}</div>
+      <div style={{ display: 'none' }}>{apiKey || ''}</div>
     </Modal>
   );
 }

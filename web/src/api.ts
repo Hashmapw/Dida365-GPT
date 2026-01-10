@@ -124,6 +124,18 @@ export async function fetchTaskDetail(body: { projectId: string; taskId: string 
   });
 }
 
+export async function fetchPrompts() {
+  return requestJson<{ systemHint: string; userTemplate: string }>('/api/prompts');
+}
+
+export async function savePrompts(body: { systemHint: string; userTemplate: string }) {
+  return requestJson<{ success: boolean }>('/api/prompts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export interface CreateTasksBody extends TokenPayload {
   projectId: string;
   projectName?: string;

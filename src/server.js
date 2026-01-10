@@ -128,6 +128,7 @@ const TOKEN_EXPIRY_BUFFER_SECONDS = 60;
 const CLIENT_DIST_DIR = path.join(__dirname, '../dist');
 const CLIENT_PUBLIC_DIR = path.join(__dirname, '../public');
 const STATIC_DIR = fs.existsSync(CLIENT_DIST_DIR) ? CLIENT_DIST_DIR : CLIENT_PUBLIC_DIR;
+const ENV_PATH = path.join(__dirname, '../.env');
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -139,6 +140,46 @@ app.get('/api/time/config', (_req, res) => {
 
 app.get('/api/submissions', (_req, res) => {
   res.json({ entries: loadSubmissions() });
+});
+
+function formatEnvValue(value = '') {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function upsertEnvVar(key, value) {
+  let content = '';
+  if (fs.existsSync(ENV_PATH)) {
+    content = fs.readFileSync(ENV_PATH, 'utf8');
+  }
+  const line = `${key}=${formatEnvValue(value)}`;
+  if (content.includes(`${key}=`)) {
+    const regex = new RegExp(`^${key}=.*$`, 'm');
+    content = content.replace(regex, line);
+  } else {
+    content = content.trimEnd();
+    content += (content ? '\n' : '') + line + '\n';
+  }
+  fs.writeFileSync(ENV_PATH, content, 'utf8');
+  process.env[key] = value;
+}
+
+app.get('/api/prompts', (_req, res) => {
+  res.json({
+    systemHint: process.env.SYSTEM_HINT || process.env.AI_TASK_SYSTEM_HINT || '',
+    userTemplate: process.env.USER_TEMPLATE || process.env.AI_TASK_USER_TEMPLATE || '',
+  });
+});
+
+app.post('/api/prompts', async (req, res) => {
+  const { systemHint = '', userTemplate = '' } = req.body || {};
+  try {
+    upsertEnvVar('SYSTEM_HINT', systemHint || '');
+    upsertEnvVar('USER_TEMPLATE', userTemplate || '');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Failed to update prompts:', error.message);
+    res.status(500).json({ success: false, error: '保存提示词失败' });
+  }
 });
 
 // Enforce deterministic JSON output from GPT to simplify parsing.
@@ -229,8 +270,10 @@ function decodeEnvTemplate(value) {
 }
 
 const USER_TIME_HINT = buildUserTimeHint(TIME_SOURCE);
-const USER_MESSAGE_HINT = decodeEnvTemplate(process.env.AI_TASK_SYSTEM_HINT) || DEFAULT_USER_HINT;
-const USER_MESSAGE_TEMPLATE = decodeEnvTemplate(process.env.AI_TASK_USER_TEMPLATE) || DEFAULT_USER_TEMPLATE;
+const USER_MESSAGE_HINT =
+  decodeEnvTemplate(process.env.SYSTEM_HINT || process.env.AI_TASK_SYSTEM_HINT) || DEFAULT_USER_HINT;
+const USER_MESSAGE_TEMPLATE =
+  decodeEnvTemplate(process.env.USER_TEMPLATE || process.env.AI_TASK_USER_TEMPLATE) || DEFAULT_USER_TEMPLATE;
 
 function serializeSessionForStore(session) {
   return {

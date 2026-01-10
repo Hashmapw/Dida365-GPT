@@ -14,6 +14,7 @@ import { TasksSection } from './components/TasksSection';
 import { SubmitBar } from './components/SubmitBar';
 import { OauthModal } from './components/OauthModal';
 import { AiSettingsModal } from './components/AiSettingsModal';
+import { PromptSettingsModal } from './components/PromptSettingsModal';
 import { ProjectsModal } from './components/ProjectsModal';
 import { SubmissionsModal } from './components/SubmissionsModal';
 import {
@@ -22,6 +23,7 @@ import {
   buildTokenPayload,
   createTasks,
   exchangeAuthCode,
+  fetchPrompts,
   fetchOauthSession,
   fetchSubmissions,
   fetchTimeConfig,
@@ -29,6 +31,7 @@ import {
   fetchProjectData,
   fetchProjectTasksAll,
   fetchTaskDetail,
+  savePrompts,
   toggleTaskComplete,
   startAuthorize,
   stripHtmlSnippet,
@@ -142,6 +145,11 @@ export default function App() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [aiSettings, setAiSettings] = useState<AiSettings>({});
+  const [systemHint, setSystemHint] = useState('');
+  const [userTemplate, setUserTemplate] = useState('');
+  const [promptsLoading, setPromptsLoading] = useState(false);
+  const [promptsSaving, setPromptsSaving] = useState(false);
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
   const [aiStatus, setAiStatus] = useState('默认使用服务端配置');
@@ -205,6 +213,12 @@ export default function App() {
       validateAuth({ oauthState });
     }
   }, []);
+
+  useEffect(() => {
+    if (promptModalOpen) {
+      loadPrompts();
+    }
+  }, [promptModalOpen]);
 
   const tokenPayload = buildTokenPayload(oauthState);
 
@@ -325,6 +339,36 @@ export default function App() {
     setProjects(list);
     setProjectsStatus(list.length ? `共 ${list.length} 个清单` : '暂无清单');
     return list;
+  }
+
+  async function loadPrompts() {
+    setPromptsLoading(true);
+    const { response, data, rawText } = await fetchPrompts();
+    setPromptsLoading(false);
+    if (!response.ok) {
+      const errorText = data?.error || stripHtmlSnippet(rawText) || '无法获取提示词';
+      message.error(errorText);
+      return;
+    }
+    const decode = (val?: string) => (val ? val.replace(/\\n/g, '\n') : '');
+    setSystemHint(decode(data?.systemHint));
+    setUserTemplate(decode(data?.userTemplate));
+  }
+
+  async function handleSavePrompts(values: { systemHint: string; userTemplate: string }) {
+    setPromptsSaving(true);
+    const encode = (val: string) => val.replace(/\r?\n/g, '\\n');
+    const payload = { systemHint: encode(values.systemHint || ''), userTemplate: encode(values.userTemplate || '') };
+    const { response, data, rawText } = await savePrompts(payload);
+    setPromptsSaving(false);
+    if (!response.ok || !data?.success) {
+      const errorText = data?.error || stripHtmlSnippet(rawText) || '保存失败';
+      message.error(errorText);
+      return;
+    }
+    setSystemHint(values.systemHint);
+    setUserTemplate(values.userTemplate);
+    message.success('已保存提示词到 .env');
   }
 
   async function handleAiGenerate() {
@@ -678,6 +722,9 @@ export default function App() {
           <Button icon={<SettingOutlined />} onClick={() => setAiModalOpen(true)}>
             AI 设置
           </Button>
+          <Button icon={<SettingOutlined />} onClick={() => setPromptModalOpen(true)}>
+            Prompt 设置
+          </Button>
         </Space>
       </Card>
 
@@ -737,6 +784,16 @@ export default function App() {
         onSave={(values) => setAiSettings(values)}
         baseUrl={aiSettings.baseUrl}
         apiKey={aiSettings.apiKey}
+      />
+
+      <PromptSettingsModal
+        open={promptModalOpen}
+        onClose={() => setPromptModalOpen(false)}
+        systemHint={systemHint}
+        userTemplate={userTemplate}
+        loading={promptsLoading}
+        saving={promptsSaving}
+        onSave={handleSavePrompts}
       />
 
       <ProjectsModal
