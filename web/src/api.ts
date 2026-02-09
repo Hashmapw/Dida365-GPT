@@ -1,4 +1,4 @@
-import { Project, TaskItem, TokenPayload } from './types';
+import { Project, SyncStatus, TaskItem, TokenPayload } from './types';
 
 export interface JsonResult<T> {
   response: Response;
@@ -152,6 +152,22 @@ export async function createTasks(body: CreateTasksBody) {
   });
 }
 
-export async function fetchSubmissions() {
-  return requestJson<{ entries: any[] }>('/api/submissions');
+export async function fetchSubmissions(range?: string) {
+  const params = range ? `?range=${encodeURIComponent(range)}` : '';
+  return requestJson<{ entries: any[] }>(`/api/submissions${params}`);
+}
+
+export async function triggerSync(payload: TokenPayload) {
+  return requestJson<{ success: boolean; synced?: number; failed?: number; rateLimited?: boolean; syncState?: SyncStatus }>(
+    '/api/sync/trigger',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function fetchSyncStatus() {
+  return requestJson<SyncStatus>('/api/sync/status');
 }

@@ -16,6 +16,7 @@ export interface TaskItem {
   subTasks: string[];
   isAllDay?: boolean;
   enabled?: boolean;
+  rawLine?: string;
 }
 
 export interface Project {
@@ -53,11 +54,26 @@ export interface SubmissionEntry {
   projectName?: string;
   projectId?: string;
   createdAt?: string;
-  success?: boolean;
-  error?: string;
-  message?: string;
-  latestTask?: ProjectTask;
-  latestStatusCheckedAt?: string;
+  originalContent?: string | null;
+  aiPolishedContent?: string | null;
+  latestSyncedContent?: string | null;
+  priority?: number;
+  status?: number;
+  completedTime?: string | null;
+  dueDate?: string | null;
+  startDate?: string | null;
+  isAllDay?: boolean;
+  lastSyncedAt?: string | null;
+  syncError?: string | null;
+  requestPayload?: string | null;
+}
+
+export interface SyncStatus {
+  lastSyncAt: string | null;
+  lastSyncStatus: string | null;
+  tasksSynced: number;
+  tasksFailed: number;
+  isSyncing: boolean;
 }
 
 export interface TokenPayload {

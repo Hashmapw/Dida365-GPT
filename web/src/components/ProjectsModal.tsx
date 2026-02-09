@@ -1,6 +1,7 @@
 import { Modal, Tag, Typography, Space, Button, Empty, Spin, Tree } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Project } from '../types';
+import { StatusTag } from './SubmissionsModal';
 
 interface Props {
   open: boolean;
@@ -71,6 +72,9 @@ export function ProjectsModal({
                   />
                 ) : null}
                 <Typography.Text>{nodeData.title}</Typography.Text>
+                {nodeData.nodeType === 'task' && nodeData.taskStatus != null ? (
+                  <StatusTag entry={{ status: nodeData.taskStatus, completedTime: nodeData.taskCompletedTime }} />
+                ) : null}
                 {projectStatus[nodeData.key] ? (
                   <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
                     {projectStatus[nodeData.key]}

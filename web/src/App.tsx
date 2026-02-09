@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App as AntdApp, Button, Card, Flex, Space, Tag, Typography } from 'antd';
 import {
   ApiOutlined,
@@ -25,19 +25,19 @@ import {
   exchangeAuthCode,
   fetchPrompts,
   fetchOauthSession,
+  fetchProjectTasksAll,
   fetchSubmissions,
+  fetchSyncStatus,
   fetchTimeConfig,
   listProjects,
-  fetchProjectData,
-  fetchProjectTasksAll,
-  fetchTaskDetail,
   savePrompts,
   toggleTaskComplete,
+  triggerSync,
   startAuthorize,
   stripHtmlSnippet,
   validateAuthorization,
 } from './api';
-import { AiSettings, Project, ProjectTask, SubmissionEntry, TaskItem, TokenPayload } from './types';
+import { AiSettings, Project, ProjectTask, SubmissionEntry, SyncStatus, TaskItem, TokenPayload } from './types';
 import { getCurrentTimeWithTimezone } from './utils/time';
 
 const OAUTH_STATE_KEY = 'didauto:oauthState';
@@ -104,6 +104,7 @@ function normalizeTask(raw: Partial<TaskItem>, allDayDefault = false): TaskItem 
     subTasks: Array.isArray(raw.subTasks) ? raw.subTasks : [],
     isAllDay: resolvedAllDay,
     enabled: raw.enabled ?? true,
+    rawLine: raw.rawLine,
   };
 }
 
@@ -175,7 +176,10 @@ export default function App() {
   const [checkedProjectTaskIds, setCheckedProjectTaskIds] = useState<string[]>([]);
   const [submissionsLoading, setSubmissionsLoading] = useState(false);
   const [submissions, setSubmissions] = useState<SubmissionEntry[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
+  const lastSubmissionsLoadedAt = useRef<number>(0);
   const redirectUri = useMemo(() => new URL('/oauth/callback', window.location.origin).href, []);
   const filterOpenProjects = (items: Project[] = []) => items.filter((p) => p && p.closed !== true);
 
@@ -402,7 +406,7 @@ export default function App() {
         if (!response.ok || !data?.tasks) {
           throw new Error(data?.error || stripHtmlSnippet(rawText) || 'AI 返回为空');
         }
-        data.tasks.forEach((task) => generated.push(normalizeTask(task, false)));
+        data.tasks.forEach((task) => generated.push(normalizeTask({ ...task, rawLine: lines[i] }, false)));
         setTasks(generated.slice());
         setAiProgress({ current: i + 1, total: lines.length });
       }
@@ -510,100 +514,110 @@ export default function App() {
     });
   }
 
-  async function loadSubmissionHistory() {
-    if (!tokenPayload) {
-      message.error('需要授权后才能查看提交记录状态');
-      return;
-    }
+  async function loadSubmissionHistory(rangeOverride?: string): Promise<SubmissionEntry[]> {
     setSubmissionsLoading(true);
     try {
-      const { response, data, rawText } = await fetchSubmissions();
+      const { response, data, rawText } = await fetchSubmissions(rangeOverride ?? submissionsRange);
       if (!response.ok) {
         const errorText = data?.error || stripHtmlSnippet(rawText) || '无法获取提交记录';
         message.error(errorText);
-        return;
+        return [];
       }
-      const entries = Array.isArray(data.entries) ? (data.entries as SubmissionEntry[]) : [];
+      const entries = Array.isArray(data?.entries) ? (data.entries as SubmissionEntry[]) : [];
+      setSubmissions(entries);
+      lastSubmissionsLoadedAt.current = Date.now();
       if (!entries.length) {
-        setSubmissions([]);
-        return;
-      }
-
-      const now = dayjs();
-      const rangeMap: Record<typeof submissionsRange, number> = {
-        '1d': 1,
-        '3d': 3,
-        '7d': 7,
-        '30d': 30,
-        all: Infinity,
-      };
-      const days = rangeMap[submissionsRange] ?? Infinity;
-      const filtered = entries.filter((entry) => {
-        if (days === Infinity) return true;
-        if (!entry.createdAt) return false;
-        const ts = dayjs(entry.createdAt);
-        if (!ts.isValid()) return false;
-        return now.diff(ts, 'day', true) <= days;
-      });
-      if (!filtered.length) {
-        setSubmissions([]);
         message.warning('所选时间范围内没有提交记录');
-        return;
       }
-
-      const enriched: SubmissionEntry[] = [];
-      let rateLimited = false;
-      for (const entry of filtered) {
-        if (rateLimited) break;
-        if (!entry.projectId || !entry.id) continue;
-        const detail = await fetchTaskDetail({ projectId: entry.projectId, taskId: entry.id, ...(tokenPayload as TokenPayload) });
-        if (!detail.response.ok || !detail.data?.success || !detail.data?.data) {
-          const errText =
-            detail.data?.error ||
-            stripHtmlSnippet(detail.rawText) ||
-            `${detail.response.status || '请求失败'} ${detail.response.statusText || ''}`.trim();
-          if (detail.response.status >= 500 || errText.includes('exceed_query_limit')) {
-            rateLimited = true;
-            break;
-          }
-          continue;
-        }
-        enriched.push({
-          ...entry,
-          latestTask: detail.data.data as ProjectTask,
-          latestStatusCheckedAt: new Date().toISOString(),
-        });
+      // Also fetch sync status
+      const syncResult = await fetchSyncStatus();
+      if (syncResult.response.ok && syncResult.data) {
+        setSyncStatus(syncResult.data);
       }
-
-      setSubmissions(enriched);
-      if (rateLimited) {
-        message.error('任务详情请求频率过快，请稍后重试或缩小时间范围');
-      }
-      if (!enriched.length && !rateLimited) {
-        message.warning('未获取到任何有效的提交记录（可能已被删除或未找到）');
-      }
+      return entries;
     } finally {
       setSubmissionsLoading(false);
     }
   }
 
-  async function loadProjectTasks(project: Project, force = false) {
+  async function handleManualSync() {
     if (!tokenPayload) {
-      message.warning('请先完成授权');
+      message.error('需要授权后才能同步');
       return;
     }
+    setSyncing(true);
+    try {
+      const { response, data, rawText } = await triggerSync(tokenPayload);
+      if (!response.ok || !data?.success) {
+        const errorText = data?.error || stripHtmlSnippet(rawText) || '同步失败';
+        message.error(errorText);
+        return;
+      }
+      const msg = `同步完成: ${data.synced || 0} 成功, ${data.failed || 0} 失败${data.rateLimited ? ' (触发限流)' : ''}`;
+      if (data.failed) {
+        message.warning(msg);
+      } else {
+        message.success(msg);
+      }
+      if (data.syncState) {
+        setSyncStatus(data.syncState as SyncStatus);
+      }
+      // Reload submissions to reflect updated data
+      await loadSubmissionHistory();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  function submissionToProjectTask(entry: SubmissionEntry): ProjectTask {
+    let synced: any = {};
+    try {
+      if (entry.latestSyncedContent) synced = JSON.parse(entry.latestSyncedContent);
+    } catch {}
+    return {
+      id: entry.id || '',
+      title: synced.title || entry.title || '未命名任务',
+      desc: synced.description || synced.desc || '',
+      content: synced.content || '',
+      projectId: entry.projectId,
+      startDate: synced.startDate || entry.startDate || undefined,
+      dueDate: synced.dueDate || entry.dueDate || undefined,
+      isAllDay: synced.isAllDay ?? entry.isAllDay,
+      priority: synced.priority ?? entry.priority,
+      status: synced.status ?? entry.status,
+      completedTime: synced.completedTime || entry.completedTime || undefined,
+      items: Array.isArray(synced.items) ? synced.items : [],
+    };
+  }
+
+  async function loadProjectTasks(project: Project, force = false) {
     if (!force && projectTasksMap[project.id]) return;
     setProjectTasksLoadingId(project.id);
     setProjectTasksStatus((prev) => ({ ...prev, [project.id]: `正在加载 ${project.name || '清单'}...` }));
-    const { response, data, rawText } = await fetchProjectTasksAll({ projectId: project.id, ...(tokenPayload as TokenPayload) });
-    setProjectTasksLoadingId(null);
-    if (!response.ok || !data?.success) {
-      const errorText = data?.error || stripHtmlSnippet(rawText) || '获取清单任务失败';
-      setProjectTasksStatus((prev) => ({ ...prev, [project.id]: errorText }));
-      message.error(errorText);
-      return;
+
+    let tasks: ProjectTask[] = [];
+    const payload = buildTokenPayload(oauthState);
+    if (payload) {
+      try {
+        const { data } = await fetchProjectTasksAll({ projectId: project.id, ...payload });
+        tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+      } catch (err: any) {
+        console.warn('API loadProjectTasks failed, falling back to submissions:', err.message);
+      }
     }
-    const tasks = Array.isArray(data.tasks) ? (data.tasks as ProjectTask[]) : [];
+
+    // Fallback: if API returned nothing, use local submissions
+    if (!tasks.length) {
+      let source = submissions;
+      if (!source.length) {
+        source = await loadSubmissionHistory();
+      }
+      tasks = source
+        .filter((e) => e.projectId === project.id)
+        .map(submissionToProjectTask);
+    }
+
+    setProjectTasksLoadingId(null);
     setProjectTasksMap((prev) => ({ ...prev, [project.id]: tasks }));
     setCheckedProjectTaskIds((prev) => {
       const nextChecked = tasks.filter((t) => t.status === 2 || t.completedTime).map((t) => t.id);
@@ -654,6 +668,8 @@ export default function App() {
             title: task.title || '未命名任务',
             key: task.id,
             nodeType: 'task',
+            taskStatus: task.status,
+            taskCompletedTime: task.completedTime,
             children: Array.isArray(task.items)
               ? task.items.map((sub, idx) => ({
                   title: sub.title || `子任务 ${idx + 1}`,
@@ -761,7 +777,9 @@ export default function App() {
         }}
         onShowSubmissions={() => {
           setSubmissionsModalOpen(true);
-          loadSubmissionHistory();
+          if (Date.now() - lastSubmissionsLoadedAt.current >= 60_000) {
+            loadSubmissionHistory();
+          }
         }}
       />
 
@@ -824,9 +842,14 @@ export default function App() {
         range={submissionsRange}
         onRangeChange={(val) => {
           setSubmissionsRange(val);
+          loadSubmissionHistory(val);
+        }}
+        onRefresh={() => {
           loadSubmissionHistory();
         }}
-        onRefresh={loadSubmissionHistory}
+        syncing={syncing}
+        onSync={handleManualSync}
+        syncStatus={syncStatus}
       />
     </div>
   );

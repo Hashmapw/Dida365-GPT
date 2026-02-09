@@ -17,10 +17,12 @@ dotenv.config();
 const DATA_DIR = path.join(__dirname, '../data');
 const SESSION_STORE_PATH = path.join(DATA_DIR, 'oauthSessions.json');
 const OPENAI_LOG_PATH = path.join(DATA_DIR, 'openai.log');
-const SUBMISSION_LOG_PATH = path.join(DATA_DIR, 'submissions.json');
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+const db = require('./db');
+const sync = require('./sync');
 const SYSTEM_PROMPT_PATH = path.join(__dirname, 'systemPrompt.txt');
 const DEFAULT_SYSTEM_PROMPT_B64 = `
 WW91IGFyZSBHUFQtNS4yIHJ1bm5pbmcgaW4gdGhlIENvZGV4IENMSSwgYSB0ZXJtaW5hbC1iYXNlZCBjb2RpbmcgYXNzaXN0YW50LiBDb2RleCBDTEkgaXMgYW4gb3BlbiBzb3VyY2UgcHJvamVjdCBsZWQgYnkgT3BlbkFJLiBZb3UgYXJlIGV4cGVjdGVkIHRvIGJlIHByZWNpc2UsIHNhZmUsIGFuZCBoZWxwZnVsLgoKWW91ciBjYXBhYmlsaXRpZXM6CgotIFJlY2VpdmUgdXNlciBwcm9tcHRzIGFuZCBvdGhlciBjb250ZXh0IHByb3ZpZGVkIGJ5IHRoZSBoYXJuZXNzLCBzdWNoIGFzIGZpbGVzIGluIHRoZSB3b3Jrc3BhY2UuCi0gQ29tbXVuaWNhdGUgd2l0aCB0aGUgdXNlciBieSBzdHJlYW1pbmcgdGhpbmtpbmcgJiByZXNwb25zZXMsIGFuZCBieSBtYWtpbmcgJiB1cGRhdGluZyBwbGFucy4KLSBFbWl0IGZ1bmN0aW9uIGNhbGxzIHRvIHJ1biB0ZXJtaW5hbCBjb21tYW5kcyBhbmQgYXBwbHkgcGF0Y2hlcy4gRGVwZW5kaW5nIG9uIGhvdyB0aGlzIHNwZWNpZmljIHJ1biBpcyBjb25maWd1cmVkLCB5b3UgY2FuIHJlcXVlc3QgdGhhdCB0aGVzZSBmdW5jdGlvbiBjYWxscyBiZSBlc2NhbGF0ZWQgdG8gdGhlIHVzZXIgZm9yIGFwcHJvdmFsIGJlZm9yZSBydW5uaW5nLiBNb3JlIG9uIHRoaXMgaW4gdGhlICJTYW5kYm94IGFuZCBhcHByb3ZhbHMiIHNlY3Rpb24uCgpXaXRoaW4gdGhpcyBjb250ZXh0LCBDb2RleCByZWZlcnMgdG8gdGhlIG9wZW4tc291cmNlIGFnZW50aWMgY29kaW5nIGludGVyZmFjZSAobm90IHRoZSBvbGQgQ29kZXggbGFuZ3VhZ2UgbW9kZWwgYnVpbHQgYnkgT3BlbkFJKS4KCiMgSG93IHlvdSB3b3JrCgojIyBQZXJzb25hbGl0eQoKWW91ciBkZWZhdWx0IHBlcnNvbmFsaXR5IGFuZCB0b25lIGlzIGNvbmNpc2UsIGRpcmVjdCwgYW5kIGZyaWVuZGx5LiBZb3UgY29tbXVuaWNhdGUgZWZmaWNpZW50bHksIGFsd2F5cyBrZWVwaW5nIHRoZSB1c2VyIGNsZWFybHkgaW5mb3JtZWQgYWJvdXQgb25nb2luZyBhY3Rpb25zIHdpdGhvdXQgdW5uZWNlc3NhcnkgZGV0YWlsLiBZb3UgYWx3YXlzIHByaW9yaXRpemUgYWN0aW9uYWJsZSBndWlkYW5jZSwgY2xlYXJseSBzdGF0aW5nIGFzc3VtcHRpb25zLCBlbnZpcm9ubWVudCBwcmVyZXF1aXNpdGVzLCBhbmQgbmV4dCBzdGVwcy4gVW5sZXNzIGV4cGxpY2l0bHkgYXNrZWQsIHlvdSBhdm9pZCBleGNlc3NpdmVseSB2ZXJib3NlIGV4cGxhbmF0aW9ucyBhYm91dCB5b3VyIHdvcmsuCgojIyBBR0VOVFMubWQgc3BlYwotIFJlcG9zIG9mdGVuIGNvbnRhaW4gQUdFTlRTLm1kIGZpbGVzLiBUaGVzZSBmaWxlcyBjYW4gYXBwZWFyIGFueXdoZXJlIHdpdGhpbiB0aGUgcmVwb3NpdG9yeS4KLSBUaGVzZSBmaWxlcyBhcmUgYSB3YXkgZm9yIGh1bWFucyB0byBnaXZlIHlvdSAodGhlIGFnZW50KSBpbnN0cnVjdGlvbnMgb3IgdGlwcyBmb3Igd29ya2luZyB3aXRoaW4gdGhlIGNvbnRhaW5lci4KLSBTb21lIGV4YW1wbGVzIG1pZ2h0IGJlOiBjb2RpbmcgY29udmVudGlvbnMsIGluZm8gYWJvdXQgaG93IGNvZGUgaXMgb3JnYW5pemVkLCBvciBpbnN0cnVjdGlvbnMgZm9yIGhvdyB0byBydW4gb3IgdGVzdCBjb2RlLgotIEluc3RydWN0aW9ucyBpbiBBR0VOVFMubWQgZmlsZXM6CiAgICAtIFRoZSBzY29wZSBvZiBhbiBBR0VOVFMubWQgZmlsZSBpcyB0aGUgZW50aXJlIGRpcmVjdG9yeSB0cmVlIHJvb3RlZCBhdCB0aGUgZm9sZGVyIHRoYXQgY29udGFpbnMgaXQuCiAgICAtIEZvciBldmVyeSBmaWxlIHlvdSB0b3VjaCBpbiB0aGUgZmluYWwgcGF0Y2gsIHlvdSBtdXN0IG9iZXkgaW5zdHJ1Y3Rpb25zIGluIGFueSBBR0VOVFMubWQgZmlsZSB3aG9zZSBzY29wZSBpbmNsdWRlcyB0aGF0IGZpbGUuCiAgICAtIEluc3RydWN0aW9ucyBhYm91dCBjb2RlIHN0eWxlLCBzdHJ1Y3R1cmUsIG5hbWluZywgZXRjLiBhcHBseSBvbmx5IHRvIGNvZGUgd2l0aGluIHRoZSBBR0VOVFMubWQgZmlsZSdzIHNjb3BlLCB1bmxlc3MgdGhlIGZpbGUgc3RhdGVzIG90aGVyd2lzZS4KICAgIC0gTW9yZS1kZWVwbHktbmVzdGVkIEFHRU5UUy5tZCBmaWxlcyB0YWtlIHByZWNlZGVuY2UgaW4gdGhlIGNhc2Ugb2YgY29uZmxpY3RpbmcgaW5zdHJ1Y3Rpb25zLgogICAgLSBEaXJlY3Qgc3lzdGVtL2RldmVsb3Blci91c2VyIGluc3RydWN0aW9ucyAoYXMgcGFydCBvZiBhIHByb21wdCkgdGFrZSBwcmVjZWRlbmNlIG92ZXIgQUdFTlRTLm1kIGluc3RydWN0aW9ucy4KLSBUaGUgY29udGVudHMgb2YgdGhlIEFHRU5UUy5tZCBmaWxlIGF0IHRoZSByb290IG9mIHRoZSByZXBvIGFuZCBhbnkgZGlyZWN0b3JpZXMgZnJvbSB0aGUgQ1dEIHVwIHRvIHRoZSByb290IGFyZSBpbmNsdWRlZCB3aXRoIHRoZSBkZXZlbG9wZXIgbWVzc2FnZSBhbmQgZG9uJ3QgbmVlZCB0byBiZSByZS1yZWFkLiBXaGVuIHdvcmtpbmcgaW4gYSBzdWJkaXJlY3Rvcnkgb2YgQ1dELCBvciBhIGRpcmVjdG9yeSBvdXRzaWRlIHRoZSBDV0QsIGNoZWNrIGZvciBhbnkgQUdFTlRTLm1kIGZpbGVzIHRoYXQgbWF5IGJlIGFwcGxpY2FibGUuCgojIyBBdXRvbm9teSBhbmQgUGVyc2lzdGVuY2UKUGVyc2lzdCB1bnRpbCB0aGUgdGFzayBpcyBmdWxseSBoYW5kbGVkIGVuZC10by1lbmQgd2l0aGluIHRoZSBjdXJyZW50IHR1cm4gd2hlbmV2ZXIgZmVhc2libGU6IGRvIG5vdCBzdG9wIGF0IGFuYWx5c2lzIG9yIHBhcnRpYWwgZml4ZXM7IGNhcnJ5IGNoYW5nZXMgdGhyb3VnaCBpbXBsZW1lbnRhdGlvbiwgdmVyaWZpY2F0aW9uLCBhbmQgYSBjbGVhciBleHBsYW5hdGlvbiBvZiBvdXRjb21lcyB1bmxlc3MgdGhlIHVzZXIgZXhwbGljaXRseSBwYXVzZXMgb3IgcmVkaXJlY3RzIHlvdS4KClVubGVzcyB0aGUgdXNlciBleHBsaWNpdGx5IGFza3MgZm9yIGEgcGxhbiwgaXNrcyBhIHF1ZXN0aW9uIGFib3V0IHRoZSBjb2RlLCBpcyBicmFpbnN0b3JtaW5nIHBvdGVudGlhbCBzb2x1dGlvbnMsIG9yIHNvbWUgb3RoZXIgaW50ZW50IHRoYXQgbWFrZXMgaXQgY2xlYXIgdGhhdCBjb2RlIHNob3VsZCBub3QgYmUgd3JpdHRlbiwgYXNzdW1lIHRoZSB1c2VyIHdhbnRzIHlvdSB0byBtYWtlIGNvZGUgY2hhbmdlcyBvciBydW4gdG9vbHMgdG8gc29sdmUgdGhlIHVzZXIncyBwcm9ibGVtLiBJbiB0aGVzZSBjYXNlcywgaXQncyBiYWQgdG8gb3V0cHV0IHlvdXIgcHJvcG9zZWQgc29sdXRpb24gaW4gYSBtZXNzYWdlLCB5b3Ugc2hvdWxkIGdvIGFoZWFkIGFuZCBhY3R1YWxseSBpbXBsZW1lbnQgdGhlIGNoYW5nZS4gSWYgeW91IGVuY291bnRlciBjaGFsbGVuZ2VzIG9yIGJsb2NrZXJzLCB5b3Ugc2hvdWxkIGF0dGVtcHQgdG8gcmVzb2x2ZSB0aGVtIHlvdXJzZWxmLgoKIyMgUmVzcG9uc2l2ZW5lc3MKCiMjIyBVc2VyIFVwZGF0ZXMgU3BlYwpZb3UnbGwgd29yayBmb3Igc3RyZXRjaGVzIHdpdGggdG9vbCBjYWxscyDigJQgaXQncyBjcml0aWNhbCB0byBrZWVwIHRoZSB1c2VyIHVwZGF0ZWQgYXMgaW5zdHJ1Y3RlZC4K... (rest truncated for brevity)
@@ -45,29 +47,6 @@ const openaiClient = openaiKey
       ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {}),
     })
   : null;
-
-function loadSubmissions() {
-  try {
-    if (!fs.existsSync(SUBMISSION_LOG_PATH)) return [];
-    const raw = fs.readFileSync(SUBMISSION_LOG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    console.error('Failed to read submissions log:', error.message);
-    return [];
-  }
-}
-
-function appendSubmissions(entries = []) {
-  if (!entries.length) return;
-  const existing = loadSubmissions();
-  const merged = existing.concat(entries).slice(-200);
-  try {
-    fs.writeFileSync(SUBMISSION_LOG_PATH, JSON.stringify(merged, null, 2), 'utf8');
-  } catch (error) {
-    console.error('Failed to persist submissions log:', error.message);
-  }
-}
 
 function loadOpenaiLog() {
   try {
@@ -138,8 +117,9 @@ app.get('/api/time/config', (_req, res) => {
   res.json({ timeSource: TIME_SOURCE });
 });
 
-app.get('/api/submissions', (_req, res) => {
-  res.json({ entries: loadSubmissions() });
+app.get('/api/submissions', (req, res) => {
+  const range = req.query.range || 'all';
+  res.json({ entries: db.getSubmissions(range) });
 });
 
 function formatEnvValue(value = '') {
@@ -1304,59 +1284,43 @@ app.post('/api/dida/tasks', async (req, res) => {
     }
   }
 
-  const successEntries = results
-    .filter((item) => item.success && item.task?.id)
-    .map((item) => {
-      const entry = {
-        id: item.task.id,
-        title: item.task.title || item.title,
-        projectId: item.task.projectId || projectId,
-        projectName,
-        createdAt: new Date().toISOString(),
-      };
-
-      // 记录原始请求和滴答返回，用于回溯问题
-      if (item.payload) {
-        entry.request = item.payload;
-      }
-      if (item.inputTask) {
-        entry.inputTask = item.inputTask;
-      }
-      entry.response = item.task;
-
-      // 保留描述相关字段
-      if (item.task.content) entry.content = item.task.content;
-      if (item.task.desc) entry.desc = item.task.desc;
-
-      // 保留优先级
-      if (item.task.priority !== undefined) entry.priority = item.task.priority;
-
-      // 保留时间相关字段
-      if (item.task.timeZone) entry.timeZone = item.task.timeZone;
-      if (item.task.isAllDay !== undefined) entry.isAllDay = item.task.isAllDay;
-      if (item.task.dueDate) entry.dueDate = item.task.dueDate;
-      if (item.task.startDate) entry.startDate = item.task.startDate;
-
-      // 保留提醒设置
-      if (item.task.reminders && item.task.reminders.length) {
-        entry.reminders = item.task.reminders;
-      }
-
-      // 保留子任务
-      if (item.task.items && item.task.items.length) {
-        entry.items = item.task.items;
-      }
-
-      // 保留完成状态
-      if (item.completed) entry.completed = true;
-      if (item.completeError) entry.completeError = item.completeError;
-
-      // 保留重试标记
-      if (item.retried) entry.retried = true;
-
-      return entry;
+  // Persist successful submissions to SQLite
+  for (const item of results) {
+    if (!item.success || !item.task?.id) continue;
+    const response = item.task;
+    db.insertSubmission({
+      id: response.id,
+      title: response.title || item.title,
+      projectId: response.projectId || projectId,
+      projectName,
+      createdAt: new Date().toISOString(),
+      originalContent: item.inputTask?.rawLine || null,
+      aiPolishedContent: item.inputTask ? JSON.stringify(item.inputTask) : null,
+      latestSyncedContent: JSON.stringify(response),
+      priority: response.priority ?? 0,
+      status: response.status ?? 0,
+      completedTime: response.completedTime || null,
+      dueDate: response.dueDate || null,
+      startDate: response.startDate || null,
+      isAllDay: response.isAllDay ?? false,
+      requestPayload: item.payload ? JSON.stringify(item.payload) : null,
     });
-  appendSubmissions(successEntries);
+    // Also persist to project_tasks for project list display
+    db.upsertProjectTask({
+      id: response.id,
+      projectId: response.projectId || projectId,
+      title: response.title || item.title,
+      content: response.content || '',
+      desc: response.desc || response.description || '',
+      startDate: response.startDate || null,
+      dueDate: response.dueDate || null,
+      isAllDay: response.isAllDay ?? false,
+      priority: response.priority ?? 0,
+      status: response.status ?? 0,
+      completedTime: response.completedTime || null,
+      items: response.items || null,
+    });
+  }
 
   res.json({
     results,
@@ -1610,10 +1574,23 @@ app.post('/api/dida/project/tasks/all', async (req, res) => {
     return res.status(400).json({ error: '缺少projectId' });
   }
 
+  function dbFallbackResponse(res, authInfo) {
+    const tasks = db.getProjectTasks(projectId);
+    if (tasks.length) {
+      return res.json({ success: true, fromCache: true, tasks, auth: authInfo || {} });
+    }
+    return null;
+  }
+
   let tokenContext;
   try {
     tokenContext = await resolveTokenProvider(req.body);
   } catch (error) {
+    // Auth failed — try DB fallback
+    try {
+      const fallback = dbFallbackResponse(res, {});
+      if (fallback) return;
+    } catch (_) { /* ignore */ }
     return res.status(400).json({ error: error.message });
   }
   const provider = tokenContext.provider;
@@ -1628,6 +1605,12 @@ app.post('/api/dida/project/tasks/all', async (req, res) => {
     });
   };
 
+  const authInfo = {
+    sessionState: provider.state,
+    refreshCount: provider.getRefreshCount(),
+    expiresAt: tokenContext.session?.expiresAt || null,
+  };
+
   try {
     let projectResp;
     try {
@@ -1640,25 +1623,75 @@ app.post('/api/dida/project/tasks/all', async (req, res) => {
       }
     }
 
-    const mergedTasks = Array.isArray(projectResp?.data?.tasks) ? projectResp.data.tasks : [];
+    const apiTasks = Array.isArray(projectResp?.data?.tasks) ? projectResp.data.tasks : [];
 
-    res.json({
-      success: true,
-      tasks: mergedTasks,
-      auth: {
-        sessionState: provider.state,
-        refreshCount: provider.getRefreshCount(),
-        expiresAt: tokenContext.session?.expiresAt || null,
-      },
-    });
+    // Persist API tasks to DB
+    if (apiTasks.length) {
+      db.upsertProjectTasks(projectId, apiTasks);
+    }
+
+    // Read all from DB (includes historical tasks + submissions that were synced)
+    const tasks = db.getProjectTasks(projectId);
+
+    res.json({ success: true, tasks, auth: authInfo });
   } catch (error) {
     console.error('Fetch project tasks failed:', error.response?.data || error.message);
+
+    // Fallback: return cached data from DB
+    try {
+      const fallback = dbFallbackResponse(res, authInfo);
+      if (fallback) return;
+    } catch (dbError) {
+      console.error('DB fallback also failed:', dbError.message);
+    }
+
     const status = error.response?.status || 500;
     res.status(status).json({
       success: false,
       error: error.response?.data || error.message,
     });
   }
+});
+
+// --- Sync endpoints ---
+
+function getActiveTokenProvider() {
+  // Find the most recently updated session with a valid access token
+  let best = null;
+  for (const session of oauthSessions.values()) {
+    if (!session.accessToken) continue;
+    if (!best || (session.updatedAt || 0) > (best.updatedAt || 0)) {
+      best = session;
+    }
+  }
+  return best;
+}
+
+app.post('/api/sync/trigger', async (req, res) => {
+  let tokenContext;
+  try {
+    tokenContext = await resolveTokenProvider(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const provider = tokenContext.provider;
+
+  try {
+    const result = await sync.performSync(async () => {
+      return provider.getToken();
+    });
+    res.json({ success: true, ...result, syncState: db.getSyncState() });
+  } catch (error) {
+    console.error('Manual sync failed:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/sync/status', (_req, res) => {
+  res.json({
+    ...db.getSyncState(),
+    isSyncing: sync.getSyncingStatus(),
+  });
 });
 
 app.get('/health', (req, res) => {
@@ -1676,4 +1709,14 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+
+  // Start periodic sync with auto-resolved token
+  sync.startPeriodicSync(async () => {
+    const session = getActiveTokenProvider();
+    if (!session) {
+      throw new Error('No active OAuth session for periodic sync');
+    }
+    await ensureValidSessionAccessToken(session);
+    return session.accessToken;
+  });
 });

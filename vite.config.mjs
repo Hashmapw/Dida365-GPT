@@ -6,7 +6,7 @@ export default defineConfig({
   root: path.resolve(__dirname, 'web'),
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 36500,
     proxy: {
       '/api': 'http://localhost:36500',
       '/oauth': 'http://localhost:36500',

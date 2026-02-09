@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { App as AntdApp, Modal, Typography, Space, Empty, Button, Spin, Tag, Table, Switch, Flex, Segmented } from 'antd';
+import React from 'react';
+import { App as AntdApp, Modal, Typography, Space, Empty, Button, Spin, Tag, Table, Flex, Segmented, Descriptions } from 'antd';
 import dayjs from 'dayjs';
-import { ReloadOutlined } from '@ant-design/icons';
-import { SubmissionEntry } from '../types';
+import { ReloadOutlined, SyncOutlined, CopyOutlined } from '@ant-design/icons';
+import { SubmissionEntry, SyncStatus } from '../types';
 
 interface Props {
   open: boolean;
@@ -12,49 +12,13 @@ interface Props {
   onRefresh: () => void;
   range: '1d' | '3d' | '7d' | '30d' | 'all';
   onRangeChange: (val: '1d' | '3d' | '7d' | '30d' | 'all') => void;
+  syncing?: boolean;
+  onSync?: () => void;
+  syncStatus?: SyncStatus | null;
 }
 
-export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, range, onRangeChange }: Props) {
+export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, range, onRangeChange, syncing, onSync, syncStatus }: Props) {
   const { message } = AntdApp.useApp();
-  const visibleEntries = entries.filter((item) => item.latestTask);
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const timerRef = useRef<number | null>(null);
-  const startRef = useRef<number | null>(null);
-  const DURATION_MS = 60_000;
-
-  useEffect(() => {
-    if (!autoRefresh || !open) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      startRef.current = null;
-      setProgress(0);
-      return;
-    }
-    startRef.current = Date.now();
-    timerRef.current = window.setInterval(() => {
-      if (!startRef.current) return;
-      const elapsed = Date.now() - startRef.current;
-      const pct = Math.min(100, (elapsed / DURATION_MS) * 100);
-      setProgress(pct);
-      if (elapsed >= DURATION_MS) {
-        startRef.current = Date.now();
-        setProgress(0);
-        onRefresh();
-      }
-    }, 500);
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      startRef.current = null;
-    };
-  }, [autoRefresh, open, onRefresh]);
-
-  const spinPercent = progress;
 
   const handleCopyId = async (taskId?: string) => {
     if (!taskId) return;
@@ -66,19 +30,24 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, r
     }
   };
 
+  const lastSyncText = syncStatus?.lastSyncAt
+    ? `上次同步: ${formatDateTime(syncStatus.lastSyncAt)} (${syncStatus.tasksSynced} 成功, ${syncStatus.tasksFailed} 失败)`
+    : null;
+
   return (
     <Modal open={open} onCancel={onClose} title="提交记录" footer={null} width={1100} destroyOnClose>
-      <Flex align="center" gap="middle" style={{ marginBottom: 12 }}>
+      <Flex align="center" gap="middle" style={{ marginBottom: 12 }} wrap="wrap">
         <Button
           icon={<ReloadOutlined />}
-          onClick={() => {
-            setProgress(0);
-            startRef.current = autoRefresh ? Date.now() : null;
-            onRefresh();
-          }}
+          onClick={() => onRefresh()}
         >
           刷新
         </Button>
+        {onSync && (
+          <Button icon={<SyncOutlined spin={syncing} />} onClick={onSync} loading={syncing}>
+            同步
+          </Button>
+        )}
         <Segmented
           value={range}
           onChange={(val) => onRangeChange(val as any)}
@@ -90,47 +59,55 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, r
             { label: '全部', value: 'all' },
           ]}
         />
-        <Switch
-          checkedChildren="自动刷新"
-          unCheckedChildren="自动刷新"
-          checked={autoRefresh}
-          onChange={() => {
-            setAutoRefresh((v) => !v);
-            setProgress(0);
-            startRef.current = !autoRefresh ? Date.now() : null;
-          }}
-        />
-        <Spin percent={spinPercent} size="small" />
-        <Typography.Text type="secondary">每 1 分钟自动刷新</Typography.Text>
       </Flex>
+      {lastSyncText && (
+        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+          {lastSyncText}
+        </Typography.Text>
+      )}
       {loading ? (
         <Spin />
-      ) : visibleEntries.length ? (
+      ) : entries.length ? (
         <Table
           rowKey={(row) => row.id || `${row.projectId || 'unknown'}-${row.title || 'row'}`}
-          dataSource={[...visibleEntries].reverse()}
+          dataSource={[...entries].reverse()}
           pagination={false}
           size="small"
           scroll={{ x: 'max-content' }}
+          expandable={{
+            expandedRowRender: (record) => <ExpandedContent entry={record} />,
+            rowExpandable: () => true,
+          }}
           columns={[
             {
               title: '任务',
               render: (_value, item) => (
                 <Space direction="vertical" size={2}>
-                  <Typography.Text
-                    strong
-                    style={{ cursor: item.id ? 'pointer' : 'default' }}
-                    onClick={() => handleCopyId(item.id)}
-                  >
-                    {item.title || item.latestTask?.title || '未命名任务'}
+                  <Typography.Text strong>
+                    {item.title || '未命名任务'}
                   </Typography.Text>
+                  {item.id && (
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 11, cursor: 'pointer' }}
+                      onClick={(e) => { e.stopPropagation(); handleCopyId(item.id); }}
+                    >
+                      <CopyOutlined style={{ marginRight: 4 }} />
+                      {item.id}
+                    </Typography.Text>
+                  )}
+                  {item.syncError && (
+                    <Typography.Text type="danger" style={{ fontSize: 11 }}>
+                      {item.syncError}
+                    </Typography.Text>
+                  )}
                 </Space>
               ),
             },
             {
               title: '状态',
               width: 100,
-              render: (_value, item) => (item.latestTask ? <StatusTag task={item.latestTask} /> : null),
+              render: (_value, item) => <StatusTag entry={item} />,
             },
             {
               title: '所属清单',
@@ -143,7 +120,7 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, r
             {
               title: '时间',
               width: 240,
-              render: (_value, item) => renderSchedule(item.latestTask),
+              render: (_value, item) => renderSchedule(item),
             },
             {
               title: '创建时间',
@@ -159,8 +136,8 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, r
               title: '完成时间',
               width: 200,
               render: (_value, item) =>
-                item.latestTask?.completedTime ? (
-                  <Typography.Text type="secondary">{formatDateTime(item.latestTask.completedTime)}</Typography.Text>
+                item.completedTime ? (
+                  <Typography.Text type="secondary">{formatDateTime(item.completedTime)}</Typography.Text>
                 ) : (
                   <Typography.Text type="secondary">-</Typography.Text>
                 ),
@@ -175,16 +152,65 @@ export function SubmissionsModal({ open, onClose, entries, loading, onRefresh, r
   );
 }
 
-function StatusTag({ task }: { task: any }) {
-  const completed = task?.status === 2 || Boolean(task?.completedTime);
+function ExpandedContent({ entry }: { entry: SubmissionEntry }) {
+  return (
+    <Descriptions column={1} size="small" bordered>
+      <Descriptions.Item label="原始输入">
+        {entry.originalContent ? (
+          <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{entry.originalContent}</Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">（无记录）</Typography.Text>
+        )}
+      </Descriptions.Item>
+      <Descriptions.Item label="AI 整理">
+        <ParsedJsonContent content={entry.aiPolishedContent} />
+      </Descriptions.Item>
+      <Descriptions.Item label="滴答最新">
+        <ParsedJsonContent content={entry.latestSyncedContent} />
+      </Descriptions.Item>
+    </Descriptions>
+  );
+}
+
+function ParsedJsonContent({ content }: { content?: string | null }) {
+  if (!content) {
+    return <Typography.Text type="secondary">（无记录）</Typography.Text>;
+  }
+  try {
+    const parsed = JSON.parse(content);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const entries = Object.entries(parsed).filter(([, v]) => v !== null && v !== undefined && v !== '');
+      if (!entries.length) {
+        return <Typography.Text type="secondary">（空对象）</Typography.Text>;
+      }
+      return (
+        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          {entries.map(([key, value]) => (
+            <div key={key}>
+              <Typography.Text strong style={{ fontSize: 12 }}>{key}: </Typography.Text>
+              <Typography.Text style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+              </Typography.Text>
+            </div>
+          ))}
+        </Space>
+      );
+    }
+    return <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{String(parsed)}</Typography.Text>;
+  } catch {
+    return <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{content}</Typography.Text>;
+  }
+}
+
+export function StatusTag({ entry }: { entry: { status?: number; completedTime?: string | null } }) {
+  const completed = entry.status === 2 || Boolean(entry.completedTime);
   const color = completed ? 'green' : 'orange';
   const label = completed ? '已完成' : '未完成';
   return <Tag color={color}>{label}</Tag>;
 }
 
-function renderSchedule(task?: any) {
-  if (!task) return <Typography.Text type="secondary">-</Typography.Text>;
-  const { startDate, dueDate, isAllDay } = task || {};
+function renderSchedule(entry: SubmissionEntry) {
+  const { startDate, dueDate, isAllDay } = entry;
   if (!startDate && !dueDate) return <Typography.Text type="secondary">-</Typography.Text>;
   if (startDate && dueDate) {
     const startKey = normalizeForCompare(startDate);
@@ -192,22 +218,19 @@ function renderSchedule(task?: any) {
     if (startKey === dueKey) {
       return <Typography.Text type="secondary">{formatDateTime(dueDate, isAllDay)}</Typography.Text>;
     }
-    // 全天：仅日期区间；非全天：日期时间区间
     return (
       <Typography.Text type="secondary">
         {formatDateTime(startDate, isAllDay)} ~ {formatDateTime(dueDate, isAllDay)}
       </Typography.Text>
     );
   }
-  // 只有一个时间点
   const value = dueDate || startDate;
   if (!value) return <Typography.Text type="secondary">-</Typography.Text>;
   return <Typography.Text type="secondary">{formatDateTime(value, isAllDay)}</Typography.Text>;
 }
 
-function formatDateTime(value?: string, isAllDay = false) {
+function formatDateTime(value?: string | null, isAllDay = false) {
   if (!value) return '-';
-  // Normalize timezone offset like +0000 -> +00:00 for parsing
   const normalized = value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
   const parsed = dayjs(normalized);
   if (parsed.isValid()) {
@@ -219,7 +242,7 @@ function formatDateTime(value?: string, isAllDay = false) {
   return normalized.replace('T', ' ').replace(/\.\d+/, '');
 }
 
-function normalizeForCompare(value?: string) {
+function normalizeForCompare(value?: string | null) {
   if (!value) return '';
   const normalized = value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
   const parsed = dayjs(normalized);
