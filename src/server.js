@@ -40,11 +40,47 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
 const TIME_SOURCE = (process.env.TIME_SOURCE || 'Asia/Shanghai').trim();
 
+function normalizeOpenAIBaseURL(input) {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (!raw) {
+    return { baseURL: '', apiMode: null };
+  }
+  const cleaned = raw.replace(/\/+$/, '');
+  const lower = cleaned.toLowerCase();
+  if (lower.endsWith('/chat/completions')) {
+    return {
+      baseURL: cleaned.slice(0, -'/chat/completions'.length),
+      apiMode: 'chat',
+    };
+  }
+  if (lower.endsWith('/responses')) {
+    return {
+      baseURL: cleaned.slice(0, -'/responses'.length),
+      apiMode: 'responses',
+    };
+  }
+  // tolerate common typo: /response
+  if (lower.endsWith('/response')) {
+    return {
+      baseURL: cleaned.slice(0, -'/response'.length),
+      apiMode: 'responses',
+    };
+  }
+  return { baseURL: cleaned, apiMode: null };
+}
+
+const {
+  baseURL: NORMALIZED_OPENAI_BASE_URL,
+  apiMode: OPENAI_API_MODE_FROM_URL,
+} = normalizeOpenAIBaseURL(OPENAI_BASE_URL);
+
+const DEFAULT_OPENAI_API_MODE = OPENAI_API_MODE_FROM_URL || 'chat';
+
 const openaiKey = process.env.OPENAI_API_KEY;
 const openaiClient = openaiKey
   ? new OpenAI({
       apiKey: openaiKey,
-      ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {}),
+      ...(NORMALIZED_OPENAI_BASE_URL ? { baseURL: NORMALIZED_OPENAI_BASE_URL } : {}),
     })
   : null;
 
@@ -373,14 +409,22 @@ function resolveOpenAIClient(apiKeyOverride, baseUrlOverride) {
   if (!key) {
     throw new Error('OPENAI_API_KEY 未配置，且未提供自定义 key。');
   }
-  const baseURL = baseUrlOverride || OPENAI_BASE_URL;
+
+  const normalizedOverride = normalizeOpenAIBaseURL(baseUrlOverride);
+  const baseURL = normalizedOverride.baseURL || NORMALIZED_OPENAI_BASE_URL;
+  const apiMode = normalizedOverride.apiMode || DEFAULT_OPENAI_API_MODE;
+
   if (!apiKeyOverride && !baseUrlOverride && openaiClient) {
-    return openaiClient;
+    return { client: openaiClient, apiMode: DEFAULT_OPENAI_API_MODE };
   }
-  return new OpenAI({
-    apiKey: key,
-    ...(baseURL ? { baseURL } : {}),
-  });
+
+  return {
+    client: new OpenAI({
+      apiKey: key,
+      ...(baseURL ? { baseURL } : {}),
+    }),
+    apiMode,
+  };
 }
 
 // Call OpenAI with response_format JSON schema so we can map the result directly.
@@ -389,33 +433,69 @@ async function callOpenAIForTasks(rawText, locale = 'zh', overrides = {}, contex
   if (!trimmed) {
     throw new Error('请输入至少一个任务内容。');
   }
-  const client = resolveOpenAIClient(overrides.apiKey, overrides.baseUrl);
+  const { client, apiMode } = resolveOpenAIClient(overrides.apiKey, overrides.baseUrl);
   const instructions = systemMessage;
   const userMessage = buildUserMessage(trimmed, locale, context);
 
-  const openaiPayload = {
-    model: OPENAI_MODEL,
-    instructions,
-    input: [
-      { type: 'message', role: 'user', content: [{ type: 'input_text', text: userMessage }] }
-    ],
-    response_format: { type: 'json_schema', json_schema: aiSchema },
-    temperature: 0.2
-  };
-  const response = await client.responses.create(openaiPayload);
-  const textChunk = extractTextFromResponse(response);
-  const { instructions: _omitInstructions, ...requestPayload } = openaiPayload;
-  appendOpenaiLog({
-    timestamp: toLocalISOString(),
-    request: requestPayload,
-    response: {
-      id: response?.id,
-      model: response?.model,
-      status: response?.status,
-      usage: response?.usage || null,
-      output: textChunk || '',
-    },
-  });
+  let textChunk = '';
+
+  if (apiMode === 'chat') {
+    const chatPayload = {
+      model: OPENAI_MODEL,
+      messages: [
+        { role: 'system', content: instructions },
+        { role: 'user', content: userMessage },
+      ],
+      // Most OpenAI-compatible providers implement chat.completions + json_object.
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+    };
+
+    const completion = await client.chat.completions.create(chatPayload);
+    textChunk = completion?.choices?.[0]?.message?.content || '';
+
+    appendOpenaiLog({
+      timestamp: toLocalISOString(),
+      request: {
+        model: chatPayload.model,
+        // Don't persist system prompt.
+        messages: [{ role: 'user', content: userMessage }],
+        response_format: chatPayload.response_format,
+        temperature: chatPayload.temperature,
+      },
+      response: {
+        id: completion?.id,
+        model: completion?.model,
+        status: 'completed',
+        usage: completion?.usage || null,
+        output: textChunk || '',
+      },
+    });
+  } else {
+    const openaiPayload = {
+      model: OPENAI_MODEL,
+      instructions,
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: userMessage }] }
+      ],
+      response_format: { type: 'json_schema', json_schema: aiSchema },
+      temperature: 0.2
+    };
+    const response = await client.responses.create(openaiPayload);
+    textChunk = extractTextFromResponse(response);
+    const { instructions: _omitInstructions, ...requestPayload } = openaiPayload;
+    appendOpenaiLog({
+      timestamp: toLocalISOString(),
+      request: requestPayload,
+      response: {
+        id: response?.id,
+        model: response?.model,
+        status: response?.status,
+        usage: response?.usage || null,
+        output: textChunk || '',
+      },
+    });
+  }
 
   if (!textChunk) {
     throw new Error('未从OpenAI得到有效的响应。');
@@ -1440,8 +1520,25 @@ app.post('/api/dida/project/data', async (req, res) => {
   }
 });
 
+// Lightweight: update project_tasks DB status only (no Dida365 API call)
+app.post('/api/project-task/status', (req, res) => {
+  const { taskId, status, completedTime } = req.body || {};
+  if (!taskId) {
+    return res.status(400).json({ error: '缺少taskId' });
+  }
+  try {
+    db.updateProjectTaskStatus(taskId, {
+      status: typeof status === 'number' ? status : 0,
+      completedTime: completedTime || null,
+    });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/dida/project/task/complete', async (req, res) => {
-  const { projectId, taskId, complete = true, task } = req.body || {};
+  const { projectId, taskId, task } = req.body || {};
   if (!projectId || !taskId) {
     return res.status(400).json({ error: '缺少projectId或taskId' });
   }
@@ -1454,59 +1551,62 @@ app.post('/api/dida/project/task/complete', async (req, res) => {
   }
   const provider = tokenContext.provider;
 
-  const getAuthHeaders = async () => {
-    const token = await provider.getToken();
-    return {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    };
-  };
-
   try {
-    if (complete) {
-      const headers = await getAuthHeaders();
-      await axios.post(
-        `https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}/complete`,
-        {},
-        { headers }
-      );
-      return res.json({ success: true });
+    const token = await provider.getToken();
+    await axios.post(
+      `https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}/complete`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    // Sync completion status to project_tasks DB
+    if (task) {
+      db.upsertProjectTask({
+        ...task,
+        id: taskId,
+        projectId,
+        status: 2,
+        completedTime: new Date().toISOString(),
+      });
     }
-
-    if (!task || !task.title) {
-      return res.status(400).json({ error: '缺少任务内容，无法重新创建' });
-    }
-    const payload = {
-      title: task.title,
-      projectId,
-      content: task.content || task.desc || '',
-      desc: task.desc || '',
-      priority: typeof task.priority === 'number' ? task.priority : 0,
-      dueDate: task.dueDate || '',
-      startDate: task.startDate || '',
-      isAllDay: Boolean(task.isAllDay),
-      reminders: Array.isArray(task.reminders) ? task.reminders : [],
-      items: Array.isArray(task.items)
-        ? task.items.map((item) => ({
-            title: item.title || '',
-            status: item.status,
-            sortOrder: item.sortOrder,
-            startDate: item.startDate,
-            isAllDay: item.isAllDay,
-            timeZone: item.timeZone,
-          }))
-        : [],
-    };
-    const headers = await getAuthHeaders();
-    const response = await axios.post('https://api.dida365.com/open/v1/task', payload, { headers });
-    res.json({ success: true, recreated: response.data });
+    res.json({ success: true });
   } catch (error) {
-    console.error('Toggle task completion failed:', error.response?.data || error.message);
+    if (error.response?.status === 401 && (await provider.handleUnauthorized())) {
+      try {
+        const token = await provider.getToken();
+        await axios.post(
+          `https://api.dida365.com/open/v1/project/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}/complete`,
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        if (task) {
+          db.upsertProjectTask({
+            ...task,
+            id: taskId,
+            projectId,
+            status: 2,
+            completedTime: new Date().toISOString(),
+          });
+        }
+        return res.json({ success: true });
+      } catch (retryError) {
+        console.error('Retry complete failed:', retryError.response?.data || retryError.message);
+        const status = retryError.response?.status || 500;
+        return res.status(status).json({ success: false, error: retryError.response?.data || retryError.message });
+      }
+    }
+    console.error('Complete task failed:', error.response?.data || error.message);
     const status = error.response?.status || 500;
-    res.status(status).json({
-      success: false,
-      error: error.response?.data || error.message,
-    });
+    res.status(status).json({ success: false, error: error.response?.data || error.message });
   }
 });
 

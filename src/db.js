@@ -284,12 +284,32 @@ migrateFromJson();
 // --- project_tasks CRUD ---
 
 const upsertProjectTaskStmt = db.prepare(`
-  INSERT OR REPLACE INTO project_tasks
+  INSERT INTO project_tasks
     (id, project_id, title, content, description, start_date, due_date,
      is_all_day, priority, status, completed_time, items, raw_json, fetched_at)
   VALUES
     (@id, @project_id, @title, @content, @description, @start_date, @due_date,
      @is_all_day, @priority, @status, @completed_time, @items, @raw_json, @fetched_at)
+  ON CONFLICT(id) DO UPDATE SET
+    project_id = excluded.project_id,
+    title = excluded.title,
+    content = excluded.content,
+    description = excluded.description,
+    start_date = excluded.start_date,
+    due_date = excluded.due_date,
+    is_all_day = excluded.is_all_day,
+    priority = excluded.priority,
+    status = CASE
+      WHEN project_tasks.status = 2 AND excluded.status = 0 THEN project_tasks.status
+      ELSE excluded.status
+    END,
+    completed_time = CASE
+      WHEN project_tasks.status = 2 AND excluded.status = 0 THEN project_tasks.completed_time
+      ELSE excluded.completed_time
+    END,
+    items = excluded.items,
+    raw_json = excluded.raw_json,
+    fetched_at = excluded.fetched_at
 `);
 
 function upsertProjectTask(task) {
@@ -355,6 +375,15 @@ function getSubmissionsByProject(projectId) {
     .map(rowToEntry);
 }
 
+function deleteProjectTask(taskId) {
+  db.prepare('DELETE FROM project_tasks WHERE id = ?').run(taskId);
+}
+
+function updateProjectTaskStatus(taskId, { status, completedTime }) {
+  db.prepare('UPDATE project_tasks SET status = ?, completed_time = ? WHERE id = ?')
+    .run(status, completedTime || null, taskId);
+}
+
 module.exports = {
   db,
   insertSubmission,
@@ -367,4 +396,6 @@ module.exports = {
   upsertProjectTasks,
   getProjectTasks,
   getSubmissionsByProject,
+  deleteProjectTask,
+  updateProjectTaskStatus,
 };

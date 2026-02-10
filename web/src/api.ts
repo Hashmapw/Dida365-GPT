@@ -116,6 +116,14 @@ export async function toggleTaskComplete(body: { projectId: string; taskId: stri
   });
 }
 
+export async function updateProjectTaskStatus(body: { taskId: string; status: number; completedTime?: string | null }) {
+  return requestJson<{ success: boolean }>('/api/project-task/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function fetchTaskDetail(body: { projectId: string; taskId: string } & TokenPayload) {
   return requestJson<{ success: boolean; data: any; auth?: { sessionState?: string } }>('/api/dida/project/task/detail', {
     method: 'POST',

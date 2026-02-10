@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App as AntdApp, Button, Card, Flex, Space, Tag, Typography } from 'antd';
+import { App as AntdApp, Button, Card, Flex, Space, Tag, Typography, Layout, Menu, theme, notification, Progress } from 'antd';
 import {
   ApiOutlined,
   CheckCircleOutlined,
@@ -7,6 +7,12 @@ import {
   LinkOutlined,
   LockOutlined,
   SettingOutlined,
+  FormOutlined,
+  HistoryOutlined,
+  UnorderedListOutlined,
+  SafetyOutlined,
+  RobotOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { RawInputSection } from './components/RawInputSection';
@@ -15,8 +21,9 @@ import { SubmitBar } from './components/SubmitBar';
 import { OauthModal } from './components/OauthModal';
 import { AiSettingsModal } from './components/AiSettingsModal';
 import { PromptSettingsModal } from './components/PromptSettingsModal';
-import { ProjectsModal } from './components/ProjectsModal';
-import { SubmissionsModal } from './components/SubmissionsModal';
+import { ProjectsView } from './components/ProjectsView';
+import { SubmissionsView } from './components/SubmissionsView';
+import { PageHeader } from './components/PageHeader';
 import {
   AiRewriteBody,
   aiRewrite,
@@ -33,6 +40,7 @@ import {
   savePrompts,
   toggleTaskComplete,
   triggerSync,
+  updateProjectTaskStatus,
   startAuthorize,
   stripHtmlSnippet,
   validateAuthorization,
@@ -157,8 +165,10 @@ export default function App() {
   const [aiStatusType, setAiStatusType] = useState<'success' | 'warning' | 'error'>('success');
   const [oauthModalOpen, setOauthModalOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
-  const [projectsModalOpen, setProjectsModalOpen] = useState(false);
-  const [submissionsModalOpen, setSubmissionsModalOpen] = useState(false);
+  
+  // Navigation state
+  const [activeMenuKey, setActiveMenuKey] = useState('submit-task');
+
   const [submissionsRange, setSubmissionsRange] = useState<'1d' | '3d' | '7d' | '30d' | 'all'>('7d');
   const [oauthState, setOauthState] = useState<string | null>(() => {
     return localStorage.getItem(OAUTH_STATE_KEY);
@@ -183,6 +193,75 @@ export default function App() {
   const redirectUri = useMemo(() => new URL('/oauth/callback', window.location.origin).href, []);
   const filterOpenProjects = (items: Project[] = []) => items.filter((p) => p && p.closed !== true);
 
+  const pendingTasksRef = useRef<Record<string, {
+    taskId: string;
+    projectId: string;
+    timeoutId: NodeJS.Timeout;
+    task: ProjectTask;
+  }>>({});
+  
+  const {
+    token: { colorBgContainer, borderRadiusLG },
+  } = theme.useToken();
+
+  async function executeTaskCompletion(taskId: string, projectId: string, task: ProjectTask) {
+    if (pendingTasksRef.current[taskId]) {
+      delete pendingTasksRef.current[taskId];
+    }
+    
+    const payload: any = {
+      projectId,
+      taskId,
+      complete: true,
+      task,
+      ...(tokenPayload || {}),
+    };
+
+    const { response, data, rawText } = await toggleTaskComplete(payload);
+    
+    if (!response.ok || !data?.success) {
+      // Revert UI on failure
+      setCheckedProjectTaskIds(prev => prev.filter(id => id !== taskId));
+      const errorText = data?.error || stripHtmlSnippet(rawText) || '提交任务失败';
+      message.error(errorText);
+    } else {
+       message.success(`任务 "${task.title}" 已完成`);
+       // Refresh project tasks
+       const selectedProject = projects.find((p) => p.id === projectId);
+       if (selectedProject) {
+         loadProjectTasks(selectedProject, true);
+       }
+    }
+  }
+
+  function undoTaskCompletion(taskId: string) {
+    const pending = pendingTasksRef.current[taskId];
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      notification.destroy(`pending-${taskId}`);
+      delete pendingTasksRef.current[taskId];
+
+      // Revert UI
+      setCheckedProjectTaskIds(prev => prev.filter(id => id !== taskId));
+      // Revert local DB
+      updateProjectTaskStatus({ taskId, status: 0, completedTime: null });
+      message.info('已撤销完成');
+    }
+  }
+
+  // Flush pending tasks when switching pages
+  useEffect(() => {
+    const ids = Object.keys(pendingTasksRef.current);
+    if (ids.length > 0) {
+      ids.forEach(id => {
+        const item = pendingTasksRef.current[id];
+        clearTimeout(item.timeoutId);
+        notification.destroy(`pending-${id}`);
+        executeTaskCompletion(item.taskId, item.projectId, item.task);
+      });
+    }
+  }, [activeMenuKey]);
+
   useEffect(() => {
     fetchTimeConfig().then(({ data }) => {
       if (data?.timeSource) {
@@ -190,6 +269,16 @@ export default function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (activeMenuKey === 'projects') {
+      loadProjects(true);
+    } else if (activeMenuKey === 'submissions') {
+      if (Date.now() - lastSubmissionsLoadedAt.current >= 60_000 || !submissions.length) {
+        loadSubmissionHistory();
+      }
+    }
+  }, [activeMenuKey]);
 
   useEffect(() => {
     function handleOauthMessage(event: MessageEvent) {
@@ -631,32 +720,69 @@ export default function App() {
   }
 
   async function handleToggleProjectTask(taskId: string, checked: boolean) {
+    if (!checked) {
+      // Allow unchecking ONLY if it is currently pending
+      if (pendingTasksRef.current[taskId]) {
+        undoTaskCompletion(taskId);
+        return;
+      }
+      message.warning('已完成的任务无法取消勾选');
+      return;
+    }
+
     const currentProject = Object.entries(projectTasksMap).find(([, list]) => list.some((t) => t.id === taskId))?.[0] || '';
     if (!currentProject) return;
     const task = projectTasksMap[currentProject]?.find((t) => t.id === taskId);
-    const payload: any = {
-      projectId: currentProject,
-      taskId,
-      complete: checked,
-      task,
-      ...(tokenPayload || {}),
-    };
-    const { response, data, rawText } = await toggleTaskComplete(payload);
-    if (!response.ok || !data?.success) {
-      const errorText = data?.error || stripHtmlSnippet(rawText) || '更新任务状态失败';
-      message.error(errorText);
-    } else {
-      if (checked) {
-        setCheckedProjectTaskIds((prev) => Array.from(new Set([...prev, taskId])));
-      } else {
-        setCheckedProjectTaskIds((prev) => prev.filter((id) => id !== taskId));
-      }
-      // reload tasks to reflect latest
-      const selectedProject = projects.find((p) => p.id === currentProject);
-      if (selectedProject) {
-        loadProjectTasks(selectedProject);
-      }
-    }
+    if (!task) return;
+
+    // Optimistically update UI
+    setCheckedProjectTaskIds((prev) => Array.from(new Set([...prev, taskId])));
+
+    // Immediately update local DB
+    updateProjectTaskStatus({ taskId, status: 2, completedTime: new Date().toISOString() });
+
+    // Start delay
+    const duration = 30; // seconds
+    const key = `pending-${taskId}`;
+    
+    const timeoutId = setTimeout(() => {
+      executeTaskCompletion(taskId, currentProject, task);
+      notification.destroy(key);
+    }, duration * 1000);
+
+    pendingTasksRef.current[taskId] = { taskId, projectId: currentProject, timeoutId, task };
+
+    notification.open({
+      key,
+      message: (
+        <Flex justify="space-between" align="center" style={{ width: '100%', paddingRight: 24 }}>
+           <Typography.Text strong>任务已标记完成</Typography.Text>
+           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{duration}s 后提交</Typography.Text>
+        </Flex>
+      ),
+      description: (
+        <div style={{ marginTop: 8 }}>
+          <Typography.Text ellipsis style={{ maxWidth: '100%', display: 'block', color: '#666', fontSize: 13, marginBottom: 8 }}>
+            {task.title}
+          </Typography.Text>
+          <div className="countdown-bar-container">
+            <div 
+              className="countdown-bar-fill" 
+              style={{ animation: `countdown-width ${duration}s linear forwards` }} 
+            />
+          </div>
+        </div>
+      ),
+      duration: duration,
+      btn: (
+        <Button type="primary" size="small" onClick={() => undoTaskCompletion(taskId)}>
+          撤销
+        </Button>
+      ),
+      placement: 'bottomRight',
+      icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
+      style: { width: 360 }
+    });
   }
 
   const projectTreeData = projects.map((project) => {
@@ -678,6 +804,7 @@ export default function App() {
                   disableCheckbox: true,
                 }))
               : [],
+            disableCheckbox: task.status === 2 || !!task.completedTime,
           }))
         : tasksLoaded
           ? []
@@ -718,70 +845,202 @@ export default function App() {
     </Space>
   );
 
+  const renderContent = () => {
+    switch (activeMenuKey) {
+      case 'submit-task':
+        return (
+          <>
+            <PageHeader
+              title="Markdown Submit"
+              subtitle="将组会上散落的 Todo 待办列表，自动整理并提交到滴答清单，AI 帮你补充细节，提高任务管理效率！"
+              eyebrow="Todo List 2 Dida365"
+              extra={statusBadges}
+            />
+
+            <Space direction="vertical" size="large" style={{ width: '100%', marginTop: 24 }}>
+              <RawInputSection
+                rawText={rawText}
+                locale={locale}
+                onRawChange={setRawText}
+                onLocaleChange={setLocale}
+                onGenerate={handleAiGenerate}
+                onAddTask={addEmptyTask}
+                generating={aiLoading}
+                progress={aiProgress}
+              />
+              <TasksSection
+                tasks={tasks}
+                projects={projects}
+                onTaskChange={handleTaskChange}
+                onRemoveTask={handleRemoveTask}
+                onAddTask={addEmptyTask}
+                onClearTasks={clearTasks}
+                onRefreshProjects={() => loadProjects(false)}
+              />
+            </Space>
+
+            <SubmitBar
+              onSubmit={handleSubmitClick}
+              submitting={createLoading}
+              taskCount={tasks.filter((t) => t.enabled !== false).length}
+              timeZone={timeSource}
+            />
+          </>
+        );
+      case 'projects':
+        return (
+          <ProjectsView
+            projects={projects}
+            loading={projectsLoading}
+            statusText={projectsStatus}
+            onRefresh={() => loadProjects(false)}
+            treeData={projectTreeData}
+            checkedTaskIds={checkedProjectTaskIds}
+            onToggleTask={handleToggleProjectTask}
+            onExpandProject={(projectId) => {
+              const project = projects.find((p) => p.id === projectId);
+              if (project) {
+                loadProjectTasks(project);
+              }
+            }}
+            loadingProjectId={projectTasksLoadingId}
+            projectStatus={projectTasksStatus}
+          />
+        );
+      case 'submissions':
+        return (
+          <SubmissionsView
+            entries={submissions}
+            loading={submissionsLoading}
+            range={submissionsRange}
+            onRangeChange={(val) => {
+              setSubmissionsRange(val);
+              loadSubmissionHistory(val);
+            }}
+            onRefresh={() => {
+              loadSubmissionHistory();
+            }}
+            syncing={syncing}
+            onSync={handleManualSync}
+            syncStatus={syncStatus}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
-    <div className="app-shell">
-      <Card className="hero card">
-        <div className="hero-header-row">
-          <div>
-            <p className="eyebrow">Dida365 · GPT Workflow</p>
-            <h1>Markdown Todo List 2 Dida365</h1>
-          </div>
-          <div className="hero-status">{statusBadges}</div>
+    <Layout style={{ minHeight: '100vh' }}>
+      <Layout.Sider
+        width={240}
+        theme="light"
+        style={{
+          overflow: 'auto',
+          height: '100vh',
+          position: 'fixed',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          borderRight: '1px solid rgba(5, 5, 5, 0.06)',
+          boxShadow: '4px 0 24px rgba(0,0,0,0.02)',
+          zIndex: 100,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: '32px 24px 24px', flexShrink: 0 }}>
+          <Flex align="center" gap={12}>
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, #1677ff 0%, #3b5999 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontWeight: 'bold',
+                fontSize: 18,
+                boxShadow: '0 4px 10px rgba(22, 119, 255, 0.2)',
+              }}
+            >
+              D
+            </div>
+            <Typography.Title level={4} style={{ margin: 0, fontWeight: 700, color: '#1f2433' }}>
+              Dida Auto
+            </Typography.Title>
+          </Flex>
         </div>
-        <p className="subtitle single-line">
-          将组会上散落的 Todo 待办列表，自动整理并提交到滴答清单，AI 帮你补充细节，提高任务管理效率！
-        </p>
-        <Space className="hero-actions" wrap>
-          <Button icon={<LinkOutlined />} onClick={() => setOauthModalOpen(true)}>
-            授权滴答
-          </Button>
-          <Button icon={<SettingOutlined />} onClick={() => setAiModalOpen(true)}>
-            AI 设置
-          </Button>
-          <Button icon={<SettingOutlined />} onClick={() => setPromptModalOpen(true)}>
-            Prompt 设置
-          </Button>
-        </Space>
-      </Card>
-
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
-        <RawInputSection
-          rawText={rawText}
-          locale={locale}
-          onRawChange={setRawText}
-          onLocaleChange={setLocale}
-          onGenerate={handleAiGenerate}
-          onAddTask={addEmptyTask}
-          generating={aiLoading}
-          progress={aiProgress}
-        />
-        <TasksSection
-          tasks={tasks}
-          projects={projects}
-          onTaskChange={handleTaskChange}
-          onRemoveTask={handleRemoveTask}
-          onAddTask={addEmptyTask}
-          onClearTasks={clearTasks}
-          onRefreshProjects={() => loadProjects(false)}
-        />
-      </Space>
-
-      <SubmitBar
-        onSubmit={handleSubmitClick}
-        submitting={createLoading}
-        taskCount={tasks.filter((t) => t.enabled !== false).length}
-        timeZone={timeSource}
-        onShowProjects={() => {
-          setProjectsModalOpen(true);
-          loadProjects(true);
-        }}
-        onShowSubmissions={() => {
-          setSubmissionsModalOpen(true);
-          if (Date.now() - lastSubmissionsLoadedAt.current >= 60_000) {
-            loadSubmissionHistory();
-          }
-        }}
-      />
+        
+        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 24 }}>
+          <Menu
+            mode="inline"
+            selectedKeys={[activeMenuKey]}
+            onClick={(e) => {
+              if (['oauth', 'ai-settings', 'prompt-settings'].includes(e.key)) {
+                if (e.key === 'oauth') setOauthModalOpen(true);
+                if (e.key === 'ai-settings') setAiModalOpen(true);
+                if (e.key === 'prompt-settings') setPromptModalOpen(true);
+                return;
+              }
+              setActiveMenuKey(e.key);
+            }}
+            style={{ borderRight: 0 }}
+            items={[
+              {
+                key: 'submit-task',
+                icon: <FormOutlined />,
+                label: '提交任务',
+              },
+              {
+                key: 'submissions',
+                icon: <HistoryOutlined />,
+                label: '提交记录',
+              },
+              {
+                key: 'projects',
+                icon: <UnorderedListOutlined />,
+                label: '清单列表',
+              },
+              {
+                type: 'divider',
+                style: { margin: '24px 0' },
+              },
+              {
+                key: 'settings-group',
+                label: <span style={{ fontSize: 12, color: '#888', fontWeight: 500 }}>设置与配置</span>,
+                type: 'group',
+                children: [
+                   {
+                    key: 'oauth',
+                    icon: <SafetyOutlined />,
+                    label: '授权管理',
+                  },
+                  {
+                    key: 'ai-settings',
+                    icon: <RobotOutlined />,
+                    label: 'AI 设置',
+                  },
+                  {
+                    key: 'prompt-settings',
+                    icon: <EditOutlined />,
+                    label: 'Prompt 设置',
+                  },
+                ]
+              }
+            ]}
+          />
+        </div>
+      </Layout.Sider>
+      <Layout style={{ marginLeft: 240, background: '#f7f8fb', transition: 'all 0.2s' }}>
+        <Layout.Content style={{ margin: '32px 32px 0', overflow: 'initial' }}>
+          <div className="app-shell" style={{ maxWidth: 1200, margin: '0 auto', padding: '0 0 120px' }}>
+            {renderContent()}
+          </div>
+        </Layout.Content>
+      </Layout>
 
       <OauthModal
         open={oauthModalOpen}
@@ -813,45 +1072,7 @@ export default function App() {
         saving={promptsSaving}
         onSave={handleSavePrompts}
       />
-
-      <ProjectsModal
-        open={projectsModalOpen}
-        onClose={() => setProjectsModalOpen(false)}
-        projects={projects}
-        loading={projectsLoading}
-        statusText={projectsStatus}
-        onRefresh={() => loadProjects(false)}
-        treeData={projectTreeData}
-        checkedTaskIds={checkedProjectTaskIds}
-        onToggleTask={handleToggleProjectTask}
-        onExpandProject={(projectId) => {
-          const project = projects.find((p) => p.id === projectId);
-          if (project) {
-            loadProjectTasks(project);
-          }
-        }}
-        loadingProjectId={projectTasksLoadingId}
-        projectStatus={projectTasksStatus}
-      />
-
-      <SubmissionsModal
-        open={submissionsModalOpen}
-        onClose={() => setSubmissionsModalOpen(false)}
-        entries={submissions}
-        loading={submissionsLoading}
-        range={submissionsRange}
-        onRangeChange={(val) => {
-          setSubmissionsRange(val);
-          loadSubmissionHistory(val);
-        }}
-        onRefresh={() => {
-          loadSubmissionHistory();
-        }}
-        syncing={syncing}
-        onSync={handleManualSync}
-        syncStatus={syncStatus}
-      />
-    </div>
+    </Layout>
   );
 }
 
