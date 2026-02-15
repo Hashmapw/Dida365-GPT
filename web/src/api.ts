@@ -124,6 +124,14 @@ export async function updateProjectTaskStatus(body: { taskId: string; status: nu
   });
 }
 
+export async function updateProjectTaskHidden(body: { taskId: string; isHidden: boolean; projectId?: string; task?: any }) {
+  return requestJson<{ success: boolean }>('/api/project-task/hidden', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function fetchTaskDetail(body: { projectId: string; taskId: string } & TokenPayload) {
   return requestJson<{ success: boolean; data: any; auth?: { sessionState?: string } }>('/api/dida/project/task/detail', {
     method: 'POST',

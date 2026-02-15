@@ -39,6 +39,7 @@ export interface ProjectTask {
   priority?: number;
   status?: number;
   completedTime?: string;
+  isHidden?: boolean;
   reminders?: string[];
   items?: ProjectTask[];
 }

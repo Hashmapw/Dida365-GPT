@@ -1,6 +1,6 @@
 import React from 'react';
-import { Card, Typography, Space, Button, Empty, Spin, Tree } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Card, Typography, Space, Button, Empty, Spin, Tree, Tag, Tooltip } from 'antd';
+import { ReloadOutlined, EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import { Project } from '../types';
 import { StatusTag } from './SubmissionsView';
 import { PageHeader } from './PageHeader';
@@ -13,6 +13,7 @@ interface Props {
   treeData: any[];
   checkedTaskIds: string[];
   onToggleTask: (taskId: string, checked: boolean) => void;
+  onToggleHiddenTask: (taskId: string, isHidden: boolean) => void;
   onExpandProject: (projectId: string) => void;
   loadingProjectId: string | null;
   projectStatus: Record<string, string>;
@@ -26,6 +27,7 @@ export function ProjectsView({
   treeData,
   checkedTaskIds,
   onToggleTask,
+  onToggleHiddenTask,
   onExpandProject,
   loadingProjectId,
   projectStatus,
@@ -81,8 +83,23 @@ export function ProjectsView({
                     />
                   ) : null}
                   <Typography.Text style={{ fontSize: 16 }}>{nodeData.title}</Typography.Text>
+                  {nodeData.nodeType === 'collapsed-group' ? <Tag color="default">已折叠</Tag> : null}
                   {nodeData.nodeType === 'task' && nodeData.taskStatus != null ? (
                     <StatusTag entry={{ status: nodeData.taskStatus, completedTime: nodeData.taskCompletedTime }} />
+                  ) : null}
+                  {nodeData.nodeType === 'task' ? (
+                    <Tooltip title={nodeData.isHidden ? '取消隐藏' : '隐藏任务'}>
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={nodeData.isHidden ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onToggleHiddenTask(nodeData.key, !nodeData.isHidden);
+                        }}
+                        aria-label={nodeData.isHidden ? '取消隐藏' : '隐藏任务'}
+                      />
+                    </Tooltip>
                   ) : null}
                   {projectStatus[nodeData.key] ? (
                     <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 14 }}>

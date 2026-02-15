@@ -1537,6 +1537,26 @@ app.post('/api/project-task/status', (req, res) => {
   }
 });
 
+app.post('/api/project-task/hidden', (req, res) => {
+  const { taskId, isHidden, projectId, task } = req.body || {};
+  if (!taskId) {
+    return res.status(400).json({ error: '缺少taskId' });
+  }
+  try {
+    if (projectId && task) {
+      db.upsertProjectTask({
+        ...task,
+        id: taskId,
+        projectId,
+      });
+    }
+    db.updateProjectTaskHidden(taskId, Boolean(isHidden));
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/dida/project/task/complete', async (req, res) => {
   const { projectId, taskId, task } = req.body || {};
   if (!projectId || !taskId) {

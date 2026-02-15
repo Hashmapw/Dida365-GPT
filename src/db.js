@@ -14,6 +14,14 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+function ensureColumn(tableName, columnName, columnDef) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const exists = columns.some((col) => col.name === columnName);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
+  }
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS submissions (
     id TEXT PRIMARY KEY,
@@ -57,11 +65,14 @@ db.exec(`
     priority INTEGER DEFAULT 0,
     status INTEGER DEFAULT 0,
     completed_time TEXT,
+    is_hidden INTEGER NOT NULL DEFAULT 0,
     items TEXT,
     raw_json TEXT,
     fetched_at TEXT
   );
 `);
+
+ensureColumn('project_tasks', 'is_hidden', 'INTEGER NOT NULL DEFAULT 0');
 
 // --- CRUD helpers ---
 
@@ -364,6 +375,7 @@ function projectTaskRowToObj(row) {
     priority: row.priority,
     status: row.status,
     completedTime: row.completed_time || null,
+    isHidden: Boolean(row.is_hidden),
     items: items,
   };
 }
@@ -384,6 +396,11 @@ function updateProjectTaskStatus(taskId, { status, completedTime }) {
     .run(status, completedTime || null, taskId);
 }
 
+function updateProjectTaskHidden(taskId, isHidden) {
+  db.prepare('UPDATE project_tasks SET is_hidden = ? WHERE id = ?')
+    .run(isHidden ? 1 : 0, taskId);
+}
+
 module.exports = {
   db,
   insertSubmission,
@@ -398,4 +415,5 @@ module.exports = {
   getSubmissionsByProject,
   deleteProjectTask,
   updateProjectTaskStatus,
+  updateProjectTaskHidden,
 };

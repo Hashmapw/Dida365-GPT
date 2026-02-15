@@ -236,6 +236,18 @@ function ParsedJsonTable({ content }: { content?: string | null }) {
   };
 
   const priorityMap: Record<number, string> = { 0: '无', 1: '低', 3: '中', 5: '高' };
+  const priorityTextMap: Record<string, string> = {
+    none: '无',
+    low: '低',
+    medium: '中',
+    high: '高',
+    urgent: '高',
+  };
+  const scheduleModeMap: Record<string, string> = {
+    point: '时间点',
+    range: '时间段',
+    none: '无',
+  };
   const statusMap: Record<number, string> = { 0: '未完成', 1: '进行中', 2: '已完成' };
 
   function formatValue(key: string, val: any): React.ReactNode {
@@ -246,8 +258,16 @@ function ParsedJsonTable({ content }: { content?: string | null }) {
     if (key === 'priority' && typeof val === 'number') {
       return priorityMap[val] ?? String(val);
     }
+    if (key === 'priority' && typeof val === 'string') {
+      const normalized = val.trim().toLowerCase();
+      return priorityTextMap[normalized] ?? val;
+    }
     if (key === 'status' && typeof val === 'number') {
       return statusMap[val] ?? String(val);
+    }
+    if (key === 'scheduleMode' && typeof val === 'string') {
+      const normalized = val.trim().toLowerCase();
+      return scheduleModeMap[normalized] ?? val;
     }
     if (typeof val === 'boolean' || key === 'isAllDay' || key === 'isFloating') {
       return val ? '是' : '否';

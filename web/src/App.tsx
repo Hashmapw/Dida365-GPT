@@ -40,6 +40,7 @@ import {
   savePrompts,
   toggleTaskComplete,
   triggerSync,
+  updateProjectTaskHidden,
   updateProjectTaskStatus,
   startAuthorize,
   stripHtmlSnippet,
@@ -49,6 +50,16 @@ import { AiSettings, Project, ProjectTask, SubmissionEntry, SyncStatus, TaskItem
 import { getCurrentTimeWithTimezone } from './utils/time';
 
 const OAUTH_STATE_KEY = 'didauto:oauthState';
+const ACTIVE_MENU_KEY_STORAGE = 'didauto:activeMenuKey';
+const AVAILABLE_MENU_KEYS = new Set(['submit-task', 'submissions', 'projects']);
+
+function getInitialActiveMenuKey() {
+  const stored = localStorage.getItem(ACTIVE_MENU_KEY_STORAGE);
+  if (stored && AVAILABLE_MENU_KEYS.has(stored)) {
+    return stored;
+  }
+  return 'submit-task';
+}
 
 function uid() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -147,6 +158,13 @@ function projectNameById(projects: Project[], id: string) {
   return projects.find((p) => p.id === id)?.name || '';
 }
 
+function formatProjectTaskStatus(tasks: ProjectTask[]) {
+  if (!tasks.length) return '暂无任务';
+  const hiddenCount = tasks.filter((task) => Boolean(task.isHidden)).length;
+  if (!hiddenCount) return `共 ${tasks.length} 条任务`;
+  return `共 ${tasks.length} 条任务（显示 ${tasks.length - hiddenCount}，已折叠 ${hiddenCount}）`;
+}
+
 export default function App() {
   const { message, notification } = AntdApp.useApp();
   const [rawText, setRawText] = useState('');
@@ -167,7 +185,7 @@ export default function App() {
   const [aiModalOpen, setAiModalOpen] = useState(false);
   
   // Navigation state
-  const [activeMenuKey, setActiveMenuKey] = useState('submit-task');
+  const [activeMenuKey, setActiveMenuKey] = useState(getInitialActiveMenuKey);
 
   const [submissionsRange, setSubmissionsRange] = useState<'1d' | '3d' | '7d' | '30d' | 'all'>('7d');
   const [oauthState, setOauthState] = useState<string | null>(() => {
@@ -278,6 +296,10 @@ export default function App() {
         loadSubmissionHistory();
       }
     }
+  }, [activeMenuKey]);
+
+  useEffect(() => {
+    localStorage.setItem(ACTIVE_MENU_KEY_STORAGE, activeMenuKey);
   }, [activeMenuKey]);
 
   useEffect(() => {
@@ -713,10 +735,38 @@ export default function App() {
       const merged = new Set([...prev, ...nextChecked]);
       return Array.from(merged);
     });
-    setProjectTasksStatus((prev) => ({ ...prev, [project.id]: tasks.length ? `共 ${tasks.length} 条任务` : '暂无任务' }));
+    setProjectTasksStatus((prev) => ({ ...prev, [project.id]: formatProjectTaskStatus(tasks) }));
     if (!tasks.length) {
       message.warning(`清单 ${project.name || '未命名清单'} 下暂无任务`);
     }
+  }
+
+  async function handleToggleHiddenProjectTask(taskId: string, isHidden: boolean) {
+    const currentProject = Object.entries(projectTasksMap).find(([, list]) => list.some((task) => task.id === taskId))?.[0] || '';
+    if (!currentProject) return;
+
+    const previousTasks = projectTasksMap[currentProject] || [];
+    const currentTask = previousTasks.find((task) => task.id === taskId);
+    if (!currentTask) return;
+    const nextTasks = previousTasks.map((task) => (task.id === taskId ? { ...task, isHidden } : task));
+
+    setProjectTasksMap((prev) => ({ ...prev, [currentProject]: nextTasks }));
+    setProjectTasksStatus((prev) => ({ ...prev, [currentProject]: formatProjectTaskStatus(nextTasks) }));
+
+    const { response, data, rawText } = await updateProjectTaskHidden({
+      taskId,
+      isHidden,
+      projectId: currentProject,
+      task: currentTask,
+    });
+    if (!response.ok || !data?.success) {
+      const errorText = data?.error || stripHtmlSnippet(rawText) || '更新隐藏状态失败';
+      setProjectTasksMap((prev) => ({ ...prev, [currentProject]: previousTasks }));
+      setProjectTasksStatus((prev) => ({ ...prev, [currentProject]: formatProjectTaskStatus(previousTasks) }));
+      message.error(errorText);
+      return;
+    }
+    message.success(isHidden ? '任务已隐藏' : '已取消隐藏');
   }
 
   async function handleToggleProjectTask(taskId: string, checked: boolean) {
@@ -788,24 +838,45 @@ export default function App() {
   const projectTreeData = projects.map((project) => {
     const tasksLoaded = Object.prototype.hasOwnProperty.call(projectTasksMap, project.id);
     const tasks = projectTasksMap[project.id] || [];
+
+    const toTaskNode = (task: ProjectTask) => ({
+      title: task.title || '未命名任务',
+      key: task.id,
+      nodeType: 'task',
+      taskStatus: task.status,
+      taskCompletedTime: task.completedTime,
+      isHidden: Boolean(task.isHidden),
+      children: Array.isArray(task.items)
+        ? task.items.map((sub, idx) => ({
+            title: sub.title || `子任务 ${idx + 1}`,
+            key: `${task.id}-sub-${idx}`,
+            nodeType: 'subtask',
+            disableCheckbox: true,
+          }))
+        : [],
+      disableCheckbox: task.status === 2 || !!task.completedTime,
+    });
+
+    const visibleTasks = tasks.filter((task) => !task.isHidden);
+    const hiddenTasks = tasks.filter((task) => task.isHidden);
+
     const children =
       tasks.length > 0
-        ? tasks.map((task) => ({
-            title: task.title || '未命名任务',
-            key: task.id,
-            nodeType: 'task',
-            taskStatus: task.status,
-            taskCompletedTime: task.completedTime,
-            children: Array.isArray(task.items)
-              ? task.items.map((sub, idx) => ({
-                  title: sub.title || `子任务 ${idx + 1}`,
-                  key: `${task.id}-sub-${idx}`,
-                  nodeType: 'subtask',
-                  disableCheckbox: true,
-                }))
-              : [],
-            disableCheckbox: task.status === 2 || !!task.completedTime,
-          }))
+        ? [
+            ...visibleTasks.map(toTaskNode),
+            ...(hiddenTasks.length
+              ? [
+                  {
+                    title: `已折叠任务 (${hiddenTasks.length})`,
+                    key: `${project.id}-collapsed`,
+                    nodeType: 'collapsed-group',
+                    disableCheckbox: true,
+                    selectable: false,
+                    children: hiddenTasks.map(toTaskNode),
+                  },
+                ]
+              : []),
+          ]
         : tasksLoaded
           ? []
           : [
@@ -897,6 +968,7 @@ export default function App() {
             treeData={projectTreeData}
             checkedTaskIds={checkedProjectTaskIds}
             onToggleTask={handleToggleProjectTask}
+            onToggleHiddenTask={handleToggleHiddenProjectTask}
             onExpandProject={(projectId) => {
               const project = projects.find((p) => p.id === projectId);
               if (project) {
@@ -985,7 +1057,7 @@ export default function App() {
                 if (e.key === 'prompt-settings') setPromptModalOpen(true);
                 return;
               }
-              setActiveMenuKey(e.key);
+              setActiveMenuKey(String(e.key));
             }}
             style={{ borderRight: 0 }}
             items={[
